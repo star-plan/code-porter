@@ -1,7 +1,29 @@
 [project]
 name = "code-porter"
 version = "0.1.0"
-description = "Add your description here"
+description = "Git-first workspace migration planner for remote or local code archives"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+	"rich>=14.1.0",
+	"typer>=0.19.2",
+]
+
+[project.scripts]
+code-porter = "code_porter.cli:main"
+
+[dependency-groups]
+dev = [
+	"pytest>=8.4.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/code_porter"]

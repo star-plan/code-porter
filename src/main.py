@@ -1,5 +1,4 @@
-def main():
-    print("Hello from code-porter!")
+from code_porter.cli import main
 
 
 if __name__ == "__main__":
