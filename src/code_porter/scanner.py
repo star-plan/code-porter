@@ -31,11 +31,14 @@ class ScanOptions:
     large_dir_threshold_mb: int = 500
 
 
-def default_scan_options(extra_excludes: list[str] | None = None) -> ScanOptions:
+def default_scan_options(
+    extra_excludes: list[str] | None = None,
+    large_dir_threshold_mb: int = 500,
+) -> ScanOptions:
     excludes = set(DEFAULT_EXCLUDES)
     if extra_excludes:
         excludes.update(item for item in extra_excludes if item)
-    return ScanOptions(excludes=excludes)
+    return ScanOptions(excludes=excludes, large_dir_threshold_mb=large_dir_threshold_mb)
 
 
 def scan_local_roots(paths: list[Path], options: ScanOptions) -> list[ProjectReport]:
@@ -68,18 +71,11 @@ def discover_projects(root: Path, excludes: set[str]) -> dict[Path, ProjectType]
 def inspect_local_project(path: Path, project_type: ProjectType, options: ScanOptions) -> ProjectReport:
     git_dir = path / ".git"
     is_git_repo = git_dir.exists()
-    has_remote = False
-    is_clean: bool | None = None
-
-    if is_git_repo:
-        remote_result = run_git(path, ["remote"])
-        has_remote = remote_result.returncode == 0 and bool(remote_result.stdout.strip())
-        status_result = run_git(path, ["status", "--porcelain"])
-        if status_result.returncode == 0:
-            is_clean = not bool(status_result.stdout.strip())
+    remote_name, remote_url, has_remote, is_clean = inspect_local_git_state(path, is_git_repo)
 
     size_bytes, large_directories, ignored_present = summarize_directory(path, options)
     strategy, reason = choose_strategy(is_git_repo, has_remote, is_clean)
+    worth_migrating, worth_reason = assess_migration_value(strategy, is_git_repo, has_remote, size_bytes)
 
     return ProjectReport(
         name=path.name,
@@ -87,13 +83,38 @@ def inspect_local_project(path: Path, project_type: ProjectType, options: ScanOp
         project_type=project_type,
         is_git_repo=is_git_repo,
         has_remote=has_remote,
+        remote_name=remote_name,
+        remote_url=remote_url,
         is_clean=is_clean,
         size_bytes=size_bytes,
         large_directories=large_directories,
         ignored_directories_present=ignored_present,
         migration_strategy=strategy,
         migration_reason=reason,
+        worth_migrating=worth_migrating,
+        worth_reason=worth_reason,
     )
+
+
+def inspect_local_git_state(path: Path, is_git_repo: bool) -> tuple[str | None, str | None, bool, bool | None]:
+    if not is_git_repo:
+        return None, None, False, None
+
+    remote_name: str | None = None
+    remote_url: str | None = None
+    remote_result = run_git(path, ["remote"])
+    has_remote = remote_result.returncode == 0 and bool(remote_result.stdout.strip())
+    if has_remote:
+        remote_name = remote_result.stdout.splitlines()[0].strip()
+        url_result = run_git(path, ["remote", "get-url", remote_name])
+        if url_result.returncode == 0:
+            remote_url = url_result.stdout.strip() or None
+
+    status_result = run_git(path, ["status", "--porcelain"])
+    is_clean: bool | None = None
+    if status_result.returncode == 0:
+        is_clean = not bool(status_result.stdout.strip())
+    return remote_name, remote_url, has_remote, is_clean
 
 
 def summarize_directory(path: Path, options: ScanOptions) -> tuple[int, list[str], list[str]]:
@@ -135,6 +156,23 @@ def choose_strategy(is_git_repo: bool, has_remote: bool, is_clean: bool | None) 
     return MigrationStrategy.SKIP, "无法确认仓库状态，先跳过人工确认"
 
 
+def assess_migration_value(
+    strategy: MigrationStrategy,
+    is_git_repo: bool,
+    has_remote: bool,
+    size_bytes: int,
+) -> tuple[bool, str]:
+    if strategy == MigrationStrategy.SKIP:
+        return False, "仓库状态无法自动确认，需要人工检查"
+    if size_bytes <= 0:
+        return False, "目录为空，不建议迁移"
+    if has_remote:
+        return True, "存在 Git remote，可低成本恢复"
+    if is_git_repo:
+        return True, "本地 Git 历史可通过 bundle 保留"
+    return True, "检测到可识别项目文件且存在源码内容"
+
+
 def run_git(path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(path), *args],
@@ -147,11 +185,13 @@ def run_git(path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
 def build_remote_scan_command(host: str, roots: list[str], options: ScanOptions) -> list[str]:
     marker_names = [*MARKERS.keys(), "*.sln"]
     excludes = sorted(options.excludes)
+    threshold_bytes = options.large_dir_threshold_mb * 1024 * 1024
     powershell_script = f"""
 $ErrorActionPreference = 'Stop'
 $roots = ConvertFrom-Json @'{json.dumps(roots)}'@
 $excludes = ConvertFrom-Json @'{json.dumps(excludes)}'@
 $markers = ConvertFrom-Json @'{json.dumps(marker_names)}'@
+$thresholdBytes = {threshold_bytes}
 
 function Get-ProjectType($fileName) {{
     switch ($fileName) {{
@@ -179,6 +219,24 @@ function Get-DirectorySize($path, $excludeSet) {{
     return $sum
 }}
 
+function Get-LargeDirectories($path, $excludeSet, $threshold) {{
+    $items = New-Object System.Collections.Generic.List[string]
+    Get-ChildItem -LiteralPath $path -Force -Directory -ErrorAction SilentlyContinue | ForEach-Object {{
+        if ($excludeSet -contains $_.Name) {{ return }}
+        $dirSize = Get-DirectorySize $_.FullName $excludeSet
+        if ($dirSize -ge $threshold) {{ $items.Add($_.Name) | Out-Null }}
+    }}
+    return @($items)
+}}
+
+function Get-IgnoredDirectoriesPresent($path, $excludeSet) {{
+    $found = New-Object 'System.Collections.Generic.HashSet[string]'
+    Get-ChildItem -LiteralPath $path -Recurse -Force -Directory -ErrorAction SilentlyContinue | ForEach-Object {{
+        if ($excludeSet -contains $_.Name) {{ $found.Add($_.Name) | Out-Null }}
+    }}
+    return @($found.ToArray() | Sort-Object)
+}}
+
 $reports = New-Object System.Collections.Generic.List[Object]
 
 foreach ($root in $roots) {{
@@ -194,24 +252,37 @@ foreach ($root in $roots) {{
         $gitPath = Join-Path $projectPath '.git'
         $isGit = Test-Path -LiteralPath $gitPath
         $hasRemote = $false
+        $remoteName = $null
+        $remoteUrl = $null
         $isClean = $null
 
         if ($isGit) {{
             $remoteOutput = git -C $projectPath remote 2>$null
-            if ($LASTEXITCODE -eq 0 -and $remoteOutput) {{ $hasRemote = $true }}
+            if ($LASTEXITCODE -eq 0 -and $remoteOutput) {{
+                $hasRemote = $true
+                $remoteName = ($remoteOutput | Select-Object -First 1)
+                $remoteUrl = git -C $projectPath remote get-url $remoteName 2>$null
+                if ($LASTEXITCODE -ne 0) {{ $remoteUrl = $null }}
+            }}
             $statusOutput = git -C $projectPath status --porcelain 2>$null
             if ($LASTEXITCODE -eq 0) {{ $isClean = [string]::IsNullOrWhiteSpace(($statusOutput | Out-String)) }}
         }}
 
         $sizeBytes = Get-DirectorySize $projectPath $excludes
+        $largeDirectories = Get-LargeDirectories $projectPath $excludes $thresholdBytes
+        $ignoredPresent = Get-IgnoredDirectoriesPresent $projectPath $excludes
         $reports.Add([pscustomobject]@{{
             name = Split-Path $projectPath -Leaf
             path = $projectPath
             project_type = Get-ProjectType $file.Name
             is_git_repo = $isGit
             has_remote = $hasRemote
+            remote_name = $remoteName
+            remote_url = $remoteUrl
             is_clean = $isClean
             size_bytes = $sizeBytes
+            large_directories = $largeDirectories
+            ignored_directories_present = $ignoredPresent
         }}) | Out-Null
     }}
 }}
@@ -242,6 +313,12 @@ def scan_remote_host(host: str, roots: list[str], options: ScanOptions) -> list[
     reports: list[ProjectReport] = []
     for item in data:
         strategy, reason = choose_strategy(item["is_git_repo"], item["has_remote"], item.get("is_clean"))
+        worth_migrating, worth_reason = assess_migration_value(
+            strategy,
+            item["is_git_repo"],
+            item["has_remote"],
+            item.get("size_bytes", 0),
+        )
         reports.append(
             ProjectReport(
                 name=item["name"],
@@ -249,10 +326,16 @@ def scan_remote_host(host: str, roots: list[str], options: ScanOptions) -> list[
                 project_type=ProjectType(item["project_type"]),
                 is_git_repo=item["is_git_repo"],
                 has_remote=item["has_remote"],
+                remote_name=item.get("remote_name"),
+                remote_url=item.get("remote_url"),
                 is_clean=item.get("is_clean"),
                 size_bytes=item.get("size_bytes", 0),
+                large_directories=item.get("large_directories", []),
+                ignored_directories_present=item.get("ignored_directories_present", []),
                 migration_strategy=strategy,
                 migration_reason=reason,
+                worth_migrating=worth_migrating,
+                worth_reason=worth_reason,
             )
         )
 

@@ -20,6 +20,14 @@ class MigrationStrategy(StrEnum):
     SKIP = "skip"
 
 
+class PlanAction(StrEnum):
+    CLONE = "clone"
+    PULL = "pull"
+    BUNDLE = "bundle_clone"
+    SYNC = "sync_copy"
+    SKIP = "skip"
+
+
 @dataclass(slots=True)
 class ProjectReport:
     name: str
@@ -29,10 +37,14 @@ class ProjectReport:
     has_remote: bool
     is_clean: bool | None
     size_bytes: int
+    remote_name: str | None = None
+    remote_url: str | None = None
     large_directories: list[str] = field(default_factory=list)
     ignored_directories_present: list[str] = field(default_factory=list)
     migration_strategy: MigrationStrategy = MigrationStrategy.SKIP
     migration_reason: str = ""
+    worth_migrating: bool = True
+    worth_reason: str = ""
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -40,10 +52,6 @@ class ProjectReport:
         data["migration_strategy"] = self.migration_strategy.value
         data["size_human"] = self.size_human
         return data
-
-    @property
-    def worth_migrating(self) -> bool:
-        return self.migration_strategy != MigrationStrategy.SKIP
 
     @property
     def size_human(self) -> str:

@@ -1,3 +1,3 @@
-from .models import MigrationStrategy, ProjectReport
+from .models import MigrationStrategy, PlanAction, ProjectReport
 
-__all__ = ["MigrationStrategy", "ProjectReport"]
+__all__ = ["MigrationStrategy", "PlanAction", "ProjectReport"]

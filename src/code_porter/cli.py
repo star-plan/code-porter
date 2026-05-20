@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .executor import execute_plans
 from .models import ProjectReport
 from .planner import build_plans, load_reports
 from .scanner import default_scan_options, scan_local_roots, scan_remote_host
@@ -22,7 +23,10 @@ def _render_reports(reports: list[ProjectReport]) -> None:
     table.add_column("Git")
     table.add_column("Remote")
     table.add_column("Clean")
+    table.add_column("Worth")
     table.add_column("Size")
+    table.add_column("Large Dirs")
+    table.add_column("Ignored")
     table.add_column("Strategy")
     table.add_column("Reason")
 
@@ -34,7 +38,10 @@ def _render_reports(reports: list[ProjectReport]) -> None:
             "yes" if report.is_git_repo else "no",
             "yes" if report.has_remote else "no",
             clean,
+            "yes" if report.worth_migrating else "no",
             report.size_human,
+            ", ".join(report.large_directories) or "-",
+            ", ".join(report.ignored_directories_present) or "-",
             report.migration_strategy.value,
             report.migration_reason,
         )
@@ -64,10 +71,11 @@ def _write_plan_json(payload: list[dict[str, str]], output: Path | None) -> None
 def scan_local(
     roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
     exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to exclude"),
+    large_dir_threshold_mb: int = typer.Option(500, "--large-dir-threshold-mb", min=1, help="Mark top-level directories larger than this threshold"),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write scan result to a JSON file"),
 ) -> None:
     """Scan local folders and classify migration strategy."""
-    reports = scan_local_roots(roots, default_scan_options(exclude))
+    reports = scan_local_roots(roots, default_scan_options(exclude, large_dir_threshold_mb))
     _render_reports(reports)
     _write_json(reports, json_output)
 
@@ -77,10 +85,11 @@ def scan_remote(
     host: str = typer.Argument(..., help="SSH host alias or user@host"),
     roots: list[str] = typer.Argument(..., help="Remote Windows roots such as D:/Projects"),
     exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to exclude"),
+    large_dir_threshold_mb: int = typer.Option(500, "--large-dir-threshold-mb", min=1, help="Mark top-level directories larger than this threshold"),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write scan result to a JSON file"),
 ) -> None:
     """Scan a remote Windows machine over SSH and classify migration strategy."""
-    reports = scan_remote_host(host, roots, default_scan_options(exclude))
+    reports = scan_remote_host(host, roots, default_scan_options(exclude, large_dir_threshold_mb))
     _render_reports(reports)
     _write_json(reports, json_output)
 
@@ -99,12 +108,36 @@ def plan(
     table = Table(title="Migration Plan")
     table.add_column("Project")
     table.add_column("Strategy")
+    table.add_column("Action")
     table.add_column("Destination")
     table.add_column("Command")
     for item in plans:
-        table.add_row(item.project_name, item.strategy.value, item.destination_path, item.command)
+        table.add_row(item.project_name, item.strategy.value, item.action.value, item.destination_path, item.command)
     console.print(table)
     _write_plan_json([item.to_dict() for item in plans], json_output)
+
+
+@app.command("execute")
+def execute(
+    report_file: Path = typer.Argument(..., exists=True, readable=True, resolve_path=True, help="JSON report from scan-local or scan-remote"),
+    destination_root: Path = typer.Argument(..., resolve_path=True, help="Local destination root on this Mac"),
+    source_host: str | None = typer.Option(None, "--source-host", help="SSH host alias when report paths come from a remote machine"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview actions or execute them"),
+    continue_on_error: bool = typer.Option(False, "--continue-on-error", help="Continue executing remaining plans after an error"),
+) -> None:
+    """Execute migration plans derived from a scan report."""
+    reports = load_reports(report_file)
+    plans = build_plans(reports, destination_root=destination_root, source_host=source_host)
+    results = execute_plans(plans, dry_run=dry_run, continue_on_error=continue_on_error)
+
+    table = Table(title="Execution Result")
+    table.add_column("Project")
+    table.add_column("Action")
+    table.add_column("Status")
+    table.add_column("Detail")
+    for item in results:
+        table.add_row(item.project_name, item.action.value, item.status, item.detail)
+    console.print(table)
 
 
 def main() -> None:
