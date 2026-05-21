@@ -5,6 +5,7 @@ description = "Git-first workspace migration planner for remote or local code ar
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+	"pathspec>=0.12.1",
 	"rich>=14.1.0",
 	"typer>=0.19.2",
 ]
