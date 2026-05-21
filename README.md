@@ -2,6 +2,12 @@
 
 一个纯本地运行的代码库导入导出工具。它会在当前机器上扫描项目，优先将 Git 仓库导出为 git bundle，将非 Git 项目导出为 zip；导出完成后，可在另一台机器上基于 manifest 批量导入。
 
+发布到 PyPI 后，用户可以直接运行：
+
+```bash
+uvx code-porter --help
+```
+
 ## 技术选型
 
 - 使用 uv 管理 Python 环境与依赖
@@ -15,24 +21,36 @@
 uv sync
 ```
 
+或直接从 PyPI 临时运行：
+
+```bash
+uvx code-porter scan ~/code ~/lab --json-output reports/local-scan.json
+```
+
 ## 用法
 
 扫描本地目录：
 
 ```bash
-uv run code-porter scan ~/code ~/lab --json-output reports/local-scan.json
+uvx code-porter scan ~/code ~/lab --json-output reports/local-scan.json
 ```
 
 导出 bundle/zip 归档：
 
 ```bash
-uv run code-porter export ~/code ~/lab ./exports/local-backup
+uvx code-porter export ~/code ~/lab ./exports/local-backup
 ```
 
 导入归档：
 
 ```bash
-uv run code-porter import ./exports/local-backup/manifest.json ~/code/imported
+uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
+```
+
+本地开发时也可以继续使用：
+
+```bash
+uv run code-porter --help
 ```
 
 输出内容包括：
@@ -68,3 +86,12 @@ uv run code-porter import ./exports/local-backup/manifest.json ~/code/imported
 - 导出 zip 时会读取项目根目录的 .gitignore，并叠加默认排除目录
 - bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动
 - import 遇到已存在目录时默认跳过，可用 `--on-existing replace` 覆盖
+
+## 发布到 PyPI
+
+```bash
+uv build
+uv publish
+```
+
+发布完成后，终端里直接执行 `uvx code-porter` 即可按需下载并运行。
