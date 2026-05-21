@@ -70,6 +70,7 @@ uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
 
 - 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.git
 - scan 与 export 支持 `--large-dir-threshold-mb` 调整大目录阈值
+- scan、export、import 会在终端显示进度条，减少长任务等待焦虑
 - 导出 zip 时会读取项目根目录的 .gitignore，并叠加默认排除目录
 - bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动
 - import 遇到已存在目录时默认跳过，可用 `--on-existing replace` 覆盖

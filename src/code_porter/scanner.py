@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,23 @@ def scan_local_roots(paths: list[Path], options: ScanOptions) -> list[ProjectRep
             current_type = project_roots.get(candidate)
             if current_type is None or current_type == ProjectType.UNKNOWN:
                 project_roots[candidate] = project_type
+    return [inspect_local_project(path, project_roots[path], options) for path in sorted(project_roots)]
+
+
+def scan_local_roots_with_progress(
+    paths: list[Path],
+    options: ScanOptions,
+    on_root_scanned: Callable[[Path, int, int], None] | None = None,
+) -> list[ProjectReport]:
+    project_roots: dict[Path, ProjectType] = {}
+    total = len(paths)
+    for index, root in enumerate(paths, start=1):
+        for candidate, project_type in discover_projects(root, options.excludes).items():
+            current_type = project_roots.get(candidate)
+            if current_type is None or current_type == ProjectType.UNKNOWN:
+                project_roots[candidate] = project_type
+        if on_root_scanned is not None:
+            on_root_scanned(root, index, total)
     return [inspect_local_project(path, project_roots[path], options) for path in sorted(project_roots)]
 
 

@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ def export_projects(
     reports: list[ProjectReport],
     output_dir: Path,
     source_roots: list[Path],
+    on_project_processed: Callable[[ProjectReport, int, int], None] | None = None,
 ) -> ExportManifest:
     output_dir = output_dir.expanduser().resolve()
     artifacts_dir = output_dir / "artifacts"
@@ -32,8 +34,11 @@ def export_projects(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     packages: list[PackageEntry] = []
-    for report in reports:
+    total = len(reports)
+    for index, report in enumerate(reports, start=1):
         if not report.worth_exporting or report.packaging_strategy == PackagingStrategy.SKIP:
+            if on_project_processed is not None:
+                on_project_processed(report, index, total)
             continue
 
         project_path = Path(report.path)
@@ -74,6 +79,8 @@ def export_projects(
                 ignored_patterns=collect_ignore_patterns(project_path),
             )
         )
+        if on_project_processed is not None:
+            on_project_processed(report, index, total)
 
     manifest = ExportManifest.create([str(path) for path in source_roots], packages)
     (output_dir / "manifest.json").write_text(json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -84,6 +91,7 @@ def import_packages(
     manifest_path: Path,
     destination_root: Path,
     on_existing: str = "skip",
+    on_package_processed: Callable[[PackageEntry, int, int], None] | None = None,
 ) -> list[ImportResult]:
     manifest = load_manifest(manifest_path)
     archive_root = manifest_path.parent
@@ -91,13 +99,16 @@ def import_packages(
     destination_root.mkdir(parents=True, exist_ok=True)
 
     results: list[ImportResult] = []
-    for package in manifest.packages:
+    total = len(manifest.packages)
+    for index, package in enumerate(manifest.packages, start=1):
         destination = destination_root / package.name
         if destination.exists():
             if on_existing == "replace":
                 shutil.rmtree(destination)
             else:
                 results.append(ImportResult(package.name, "skipped", "目标目录已存在"))
+                if on_package_processed is not None:
+                    on_package_processed(package, index, total)
                 continue
 
         package_file = archive_root / package.package_path
@@ -106,11 +117,15 @@ def import_packages(
             if package.overlay_path:
                 extract_zip(archive_root / package.overlay_path, destination)
             results.append(ImportResult(package.name, "imported", "bundle 导入完成"))
+            if on_package_processed is not None:
+                on_package_processed(package, index, total)
             continue
 
         destination.mkdir(parents=True, exist_ok=True)
         extract_zip(package_file, destination)
         results.append(ImportResult(package.name, "imported", "zip 导入完成"))
+        if on_package_processed is not None:
+            on_package_processed(package, index, total)
 
     return results
 
