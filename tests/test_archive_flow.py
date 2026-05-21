@@ -70,6 +70,33 @@ def test_export_creates_overlay_for_dirty_git_repo(tmp_path: Path) -> None:
     assert (tmp_path / "exported" / package.overlay_path).exists()
 
 
+def test_import_restores_dirty_worktree_overlay(tmp_path: Path) -> None:
+    project_dir = tmp_path / "dirty-app"
+    project_dir.mkdir()
+    init_git_repo(project_dir)
+    source_file = project_dir / "app.py"
+    source_file.write_text("print('v1')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_dir), "add", "app.py"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(project_dir), "commit", "-m", "init"], check=True, capture_output=True, text=True)
+    source_file.write_text("print('v2')\n", encoding="utf-8")
+    new_file = project_dir / "notes.txt"
+    new_file.write_text("dirty worktree\n", encoding="utf-8")
+
+    reports = scan_local_roots([tmp_path], default_scan_options())
+    export_dir = tmp_path / "exported"
+    manifest = export_projects(reports, export_dir, [tmp_path])
+
+    package = manifest.packages[0]
+    assert package.overlay_path is not None
+
+    results = import_packages(export_dir / "manifest.json", tmp_path / "imported")
+    assert results[0].status == "imported"
+
+    imported_project = tmp_path / "imported" / "dirty-app"
+    assert (imported_project / "app.py").read_text(encoding="utf-8") == "print('v2')\n"
+    assert (imported_project / "notes.txt").read_text(encoding="utf-8") == "dirty worktree\n"
+
+
 def test_export_falls_back_to_zip_for_git_repo_without_commits(tmp_path: Path) -> None:
     project_dir = tmp_path / "scratch-repo"
     project_dir.mkdir()
