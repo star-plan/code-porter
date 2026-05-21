@@ -169,6 +169,32 @@ def test_import_restores_bundle_and_zip_packages(tmp_path: Path) -> None:
     assert (tmp_path / "imported" / "zip-app" / "index.js").exists()
 
 
+def test_import_accepts_windows_style_manifest_paths(tmp_path: Path) -> None:
+    project_dir = tmp_path / "dirty-app"
+    project_dir.mkdir()
+    init_git_repo(project_dir)
+    source_file = project_dir / "app.py"
+    source_file.write_text("print('v1')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_dir), "add", "app.py"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(project_dir), "commit", "-m", "init"], check=True, capture_output=True, text=True)
+    source_file.write_text("print('v2')\n", encoding="utf-8")
+
+    reports = scan_local_roots([tmp_path], default_scan_options())
+    export_dir = tmp_path / "exported"
+    export_projects(reports, export_dir, [tmp_path])
+
+    manifest_path = export_dir / "manifest.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["packages"][0]["package_path"] = manifest_data["packages"][0]["package_path"].replace("/", "\\")
+    manifest_data["packages"][0]["overlay_path"] = manifest_data["packages"][0]["overlay_path"].replace("/", "\\")
+    manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    results = import_packages(manifest_path, tmp_path / "imported")
+
+    assert results[0].status == "imported"
+    assert (tmp_path / "imported" / "dirty-app" / "app.py").read_text(encoding="utf-8") == "print('v2')\n"
+
+
 def test_manifest_is_loadable(tmp_path: Path) -> None:
     project_dir = tmp_path / "zip-app"
     project_dir.mkdir()

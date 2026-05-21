@@ -22,6 +22,14 @@ class ImportResult:
     detail: str
 
 
+def manifest_relative_path(path: Path, root: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def resolve_manifest_path(archive_root: Path, manifest_path: str) -> Path:
+    return archive_root / Path(manifest_path.replace("\\", "/"))
+
+
 def export_projects(
     reports: list[ProjectReport],
     output_dir: Path,
@@ -84,7 +92,7 @@ def export_projects(
                 project_type=report.project_type,
                 source_path=report.path,
                 package_kind=package_kind,
-                package_path=str(package_path.relative_to(output_dir)),
+                package_path=manifest_relative_path(package_path, output_dir),
                 packaging_strategy=effective_strategy,
                 is_git_repo=report.is_git_repo,
                 is_clean=report.is_clean,
@@ -92,7 +100,7 @@ def export_projects(
                 size_bytes=report.size_bytes,
                 packaging_reason=effective_reason,
                 remote_url=report.remote_url,
-                overlay_path=str(overlay_path.relative_to(output_dir)) if overlay_path else None,
+                overlay_path=manifest_relative_path(overlay_path, output_dir) if overlay_path else None,
                 ignored_patterns=collect_ignore_patterns(project_path),
             )
         )
@@ -128,11 +136,11 @@ def import_packages(
                     on_package_processed(package, index, total)
                 continue
 
-        package_file = archive_root / package.package_path
+        package_file = resolve_manifest_path(archive_root, package.package_path)
         if package.package_kind == ArchiveKind.BUNDLE:
             run_command(["git", "clone", str(package_file), str(destination)])
             if package.overlay_path:
-                extract_zip(archive_root / package.overlay_path, destination)
+                extract_zip(resolve_manifest_path(archive_root, package.overlay_path), destination)
             results.append(ImportResult(package.name, "imported", "bundle 导入完成"))
             if on_package_processed is not None:
                 on_package_processed(package, index, total)
