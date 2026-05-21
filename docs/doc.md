@@ -1,6 +1,6 @@
 # code-porter
 
-“开发者工作区迁移 / 项目资产整理 / Git 优先同步器”
+“开发者工作区迁移 / 项目资产整理 / Git Bundle 导入导出器”
 
 ## 适用场景
 
@@ -8,40 +8,28 @@
 * 项目数量多
 * 有部分历史项目没规范化
 * 有大量 AI 生成代码与实验项目
-* 不想污染新 Mac 环境
+* 不想依赖 Windows OpenSSH 的复杂兼容性
 
 ## 总体架构
 
 ```text
-鸡哥（Windows）
-    ↓ OpenSSH Server
+Windows 工作机
+    ↓ 本地扫描与导出
+    Git 仓库 → git bundle
+    非 Git 项目 → zip
+    脏 Git 仓库 → bundle + overlay zip
+    ↓ 拷贝导出目录
 MacBook Pro
-    ↓ 自动扫描
-分类处理：
-    Git仓库 → clone/pull
-    非Git项目 → rsync源码
-    垃圾目录 → 自动排除
+    ↓ 本地导入
+    bundle → git clone
+    zip → 解压恢复
 ```
 
-## 第一阶段：鸡哥开启 OpenSSH Server
+## 第一阶段：Windows 本地扫描项目
 
-已完成，使用以下命令测试：
+扫描规则：
 
-```bash
-ssh kunkun
-```
-
-使用 scp 或 rsync 从 Windows 复制文件，需要以下命令：
-
-```bash
-scp "deali@192.168.10.174:/C:/code/temp.txt" ./temp.txt
-```
-
----
-
-# 第二阶段：自动扫描项目
-
-比如扫描：
+- 查找常见项目标记：
 
 ```text
 package.json
@@ -51,93 +39,60 @@ Cargo.toml
 *.sln
 ```
 
-判断：
+- 判断：
 
-* 是否 Git 仓库
-* 是否有 remote
-* 是否存在大目录
-* 是否有 node_modules
-* 是否值得迁移
+```text
+是否 Git 仓库
+是否有 remote
+是否有未提交改动
+是否存在大目录
+是否命中默认垃圾目录
+是否值得导出
+```
 
-甚至输出：
+---
+
+# 第二阶段：本地导出备份包
+
+## A. 干净 Git 仓库
+
+直接导出 bundle：
+
+```bash
+git bundle create project.bundle --all
+```
+
+manifest 里记录：
 
 ```json
 {
-  "name": "iugam-memex",
-  "type": "node",
-  "git": true,
-  "remote": true,
-  "size": "1.2GB",
-  "path": "D:/Projects/iugam-memex"
+    "name": "land-go",
+    "package_kind": "bundle",
+    "package_path": "artifacts/land-go-xxxx.bundle"
 }
 ```
 
----
+## B. 脏 Git 仓库
 
-# 第三阶段：分类迁移（重点）
+除了 bundle，再额外导出当前工作区 overlay zip：
 
-## Git 优先
-
-检查 git work tree 是否干净：
-
-```bash
-git status
+```text
+project.bundle
+project.worktree.zip
 ```
 
-如果不干净，按非 git 项目处理
-
-## A. 有 Git Remote
-
-git work tree 干净的情况下，直接：
-
-```bash
-git clone
-```
-
-## B. 本地 Git 但没 Remote
-
-先创建一个临时目录：
-
-```powershell
-$TEMP_DIR = "$env:TEMP\migration-bundles"
-mkdir $TEMP_DIR -Force
-```
-
-自动：
-
-```bash
-git bundle create "$TEMP_DIR\[project-name].bundle" --all
-```
-
-然后 Mac：
-
-```bash
-git clone project.bundle
-```
-
-这个比 rsync `.git` 更专业。
-
-很多人不知道 `git bundle`。
-
-它本质是：
-
-> “单文件 Git 仓库备份”
-
-超级适合迁移。
-
-全部迁移完成后，清理临时文件:
-
-```powershell
-Remove-Item $TEMP_DIR -Recurse -Force
-```
-
----
+这样既保留 Git 历史，也保留未提交文件。
 
 ## C. 非 Git 项目
 
-使用 scp 或 rsync
+导出 zip。
 
-排除无用目录，如：
+zip 打包时：
+
+* 优先读取项目根目录 .gitignore
+* 叠加默认排除目录
+
+默认排除：
 
 ```text
 node_modules
@@ -147,5 +102,74 @@ build
 target
 .next
 .cache
+.git
+```
+
+---
+
+# 第三阶段：跨机器复制导出目录
+
+把整个导出目录复制到 MacBook，例如：
+
+```text
+exports/windows-backup/
+    manifest.json
+    artifacts/
+        project-a.bundle
+        project-b.worktree.zip
+        project-c.zip
+```
+
+复制方式不限：
+
+* U 盘
+* SMB
+* iCloud Drive
+* 移动硬盘
+
+---
+
+# 第四阶段：Mac 本地导入
+
+## A. bundle
+
+```bash
+git clone project.bundle
+```
+
+## B. bundle + overlay zip
+
+先 clone bundle，再把 overlay zip 解压覆盖到工作区。
+
+## C. zip
+
+直接解压到目标目录。
+
+---
+
+# CLI 设计
+
+## scan
+
+本地扫描项目并输出 JSON：
+
+```bash
+uv run code-porter scan C:/code/1 --json-output reports/scan.json
+```
+
+## export
+
+本地扫描并导出备份包：
+
+```bash
+uv run code-porter export C:/code/1 ./exports/windows-backup
+```
+
+## import
+
+从 manifest 导入到 Mac 目标目录：
+
+```bash
+uv run code-porter import ./exports/windows-backup/manifest.json ~/code/imported
 ```
 
