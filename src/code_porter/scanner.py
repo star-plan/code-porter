@@ -115,9 +115,10 @@ def inspect_local_project(path: Path, project_type: ProjectType, options: ScanOp
     git_dir = path / ".git"
     is_git_repo = git_dir.exists()
     remote_name, remote_url, has_remote, is_clean = inspect_local_git_state(path, is_git_repo)
+    has_commits = git_has_commits(path, is_git_repo)
 
     size_bytes, large_directories, ignored_present = summarize_directory(path, options)
-    packaging_strategy, packaging_reason = choose_packaging_strategy(is_git_repo, is_clean)
+    packaging_strategy, packaging_reason = choose_packaging_strategy(is_git_repo, is_clean, has_commits)
     worth_exporting, worth_reason = assess_export_value(packaging_strategy, size_bytes)
 
     return ProjectReport(
@@ -160,6 +161,13 @@ def inspect_local_git_state(path: Path, is_git_repo: bool) -> tuple[str | None, 
     return remote_name, remote_url, has_remote, is_clean
 
 
+def git_has_commits(path: Path, is_git_repo: bool) -> bool:
+    if not is_git_repo:
+        return False
+    result = run_git(path, ["rev-parse", "--verify", "HEAD"])
+    return result.returncode == 0
+
+
 def summarize_directory(path: Path, options: ScanOptions) -> tuple[int, list[str], list[str]]:
     total_size = 0
     directory_sizes: dict[str, int] = {}
@@ -186,7 +194,13 @@ def summarize_directory(path: Path, options: ScanOptions) -> tuple[int, list[str
     return total_size, large_directories, sorted(ignored_present)
 
 
-def choose_packaging_strategy(is_git_repo: bool, is_clean: bool | None) -> tuple[PackagingStrategy, str]:
+def choose_packaging_strategy(
+    is_git_repo: bool,
+    is_clean: bool | None,
+    has_commits: bool,
+) -> tuple[PackagingStrategy, str]:
+    if is_git_repo and not has_commits:
+        return PackagingStrategy.ZIP, "Git 仓库尚无提交，无法创建 bundle，导出 zip"
     if is_git_repo and is_clean:
         return PackagingStrategy.BUNDLE, "Git 仓库干净，导出 git bundle"
     if is_git_repo and is_clean is False:

@@ -70,6 +70,25 @@ def test_export_creates_overlay_for_dirty_git_repo(tmp_path: Path) -> None:
     assert (tmp_path / "exported" / package.overlay_path).exists()
 
 
+def test_export_falls_back_to_zip_for_git_repo_without_commits(tmp_path: Path) -> None:
+    project_dir = tmp_path / "scratch-repo"
+    project_dir.mkdir()
+    init_git_repo(project_dir)
+    (project_dir / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+    reports = scan_local_roots([tmp_path], default_scan_options())
+
+    assert len(reports) == 1
+    assert reports[0].packaging_strategy == PackagingStrategy.ZIP
+
+    manifest = export_projects(reports, tmp_path / "exported", [tmp_path])
+    package = manifest.packages[0]
+
+    assert package.package_kind == ArchiveKind.ZIP
+    assert package.packaging_strategy == PackagingStrategy.ZIP
+    assert (tmp_path / "exported" / package.package_path).exists()
+
+
 def test_export_zip_honors_gitignore_and_default_excludes(tmp_path: Path) -> None:
     project_dir = tmp_path / "zip-app"
     project_dir.mkdir()

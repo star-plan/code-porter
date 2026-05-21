@@ -45,17 +45,34 @@ def export_projects(
         slug = build_package_slug(report)
         package_kind: ArchiveKind
         overlay_path: Path | None = None
+        effective_strategy = report.packaging_strategy
+        effective_reason = report.packaging_reason
 
         if report.packaging_strategy == PackagingStrategy.BUNDLE:
             package_path = artifacts_dir / f"{slug}.bundle"
-            create_git_bundle(project_path, package_path)
-            package_kind = ArchiveKind.BUNDLE
+            try:
+                create_git_bundle(project_path, package_path)
+                package_kind = ArchiveKind.BUNDLE
+            except subprocess.CalledProcessError:
+                package_path = artifacts_dir / f"{slug}.zip"
+                create_zip_archive(project_path, package_path)
+                package_kind = ArchiveKind.ZIP
+                effective_strategy = PackagingStrategy.ZIP
+                effective_reason = "bundle 导出失败，已降级为 zip"
         elif report.packaging_strategy == PackagingStrategy.BUNDLE_WITH_OVERLAY:
             package_path = artifacts_dir / f"{slug}.bundle"
             overlay_path = artifacts_dir / f"{slug}.worktree.zip"
-            create_git_bundle(project_path, package_path)
-            create_zip_archive(project_path, overlay_path)
-            package_kind = ArchiveKind.BUNDLE
+            try:
+                create_git_bundle(project_path, package_path)
+                create_zip_archive(project_path, overlay_path)
+                package_kind = ArchiveKind.BUNDLE
+            except subprocess.CalledProcessError:
+                package_path = artifacts_dir / f"{slug}.zip"
+                overlay_path = None
+                create_zip_archive(project_path, package_path)
+                package_kind = ArchiveKind.ZIP
+                effective_strategy = PackagingStrategy.ZIP
+                effective_reason = "bundle 导出失败，已降级为 zip"
         else:
             package_path = artifacts_dir / f"{slug}.zip"
             create_zip_archive(project_path, package_path)
@@ -68,12 +85,12 @@ def export_projects(
                 source_path=report.path,
                 package_kind=package_kind,
                 package_path=str(package_path.relative_to(output_dir)),
-                packaging_strategy=report.packaging_strategy,
+                packaging_strategy=effective_strategy,
                 is_git_repo=report.is_git_repo,
                 is_clean=report.is_clean,
                 has_remote=report.has_remote,
                 size_bytes=report.size_bytes,
-                packaging_reason=report.packaging_reason,
+                packaging_reason=effective_reason,
                 remote_url=report.remote_url,
                 overlay_path=str(overlay_path.relative_to(output_dir)) if overlay_path else None,
                 ignored_patterns=collect_ignore_patterns(project_path),
