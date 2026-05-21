@@ -1,5 +1,10 @@
 # code-porter
 
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/code-porter)](https://pypi.org/project/code-porter/)
+[![PyPI Version](https://img.shields.io/pypi/v/code-porter)](https://pypi.org/project/code-porter/)
+[![CI](https://github.com/star-plan/code-porter/actions/workflows/ci.yml/badge.svg)](https://github.com/star-plan/code-porter/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/star-plan/code-porter)](https://github.com/star-plan/code-porter/blob/main/LICENSE)
+
 一个纯本地运行的代码库导入导出工具。它会在当前机器上扫描项目，优先将 Git 仓库导出为 git bundle，将非 Git 项目导出为 zip；导出完成后，可在另一台机器上基于 manifest 批量导入。
 
 ## 快速开始
