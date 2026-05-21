@@ -2,55 +2,23 @@
 
 一个纯本地运行的代码库导入导出工具。它会在当前机器上扫描项目，优先将 Git 仓库导出为 git bundle，将非 Git 项目导出为 zip；导出完成后，可在另一台机器上基于 manifest 批量导入。
 
-发布到 PyPI 后，用户可以直接运行：
+## 快速开始
+
+无需安装任何 Python 环境或依赖，一行命令即可运行：
 
 ```bash
+# 查看帮助
 uvx code-porter --help
 ```
 
-## 技术选型
-
-- 使用 uv 管理 Python 环境与依赖
-- 使用 typer 构建 CLI
-- 使用 rich 输出表格与 JSON
-- 使用 pathspec 解析 .gitignore 规则
-
-## 安装
-
-```bash
-uv sync
-```
-
-或直接从 PyPI 临时运行：
-
-```bash
-uvx code-porter scan ~/code ~/lab --json-output reports/local-scan.json
-```
+> `uvx` 是 [uv](https://docs.astral.sh/uv/) 自带的命令，如果尚未安装 uv，可参考 [uv 官方安装指南](https://docs.astral.sh/uv/getting-started/installation/)。
 
 ## 用法
 
-扫描本地目录：
+### 扫描本地目录
 
 ```bash
 uvx code-porter scan ~/code ~/lab --json-output reports/local-scan.json
-```
-
-导出 bundle/zip 归档：
-
-```bash
-uvx code-porter export ~/code ~/lab ./exports/local-backup
-```
-
-导入归档：
-
-```bash
-uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
-```
-
-本地开发时也可以继续使用：
-
-```bash
-uv run code-porter --help
 ```
 
 输出内容包括：
@@ -67,17 +35,31 @@ uv run code-porter --help
 - 默认忽略目录命中情况
 - 推荐打包策略与原因
 
+### 导出 bundle/zip 归档
+
+```bash
+uvx code-porter export ~/code ~/lab ./exports/local-backup
+```
+
+### 导入归档
+
+```bash
+uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
+```
+
+## 命令
+
+| 命令 | 作用 |
+|------|------|
+| scan | 扫描本地目录，分析项目结构 |
+| export | 扫描并输出 bundle/zip 归档，以及 manifest.json |
+| import | 根据 manifest.json 将归档导入到目标目录 |
+
 ## 当前打包策略
 
 - 干净 Git 仓库：导出 git bundle
 - 脏 Git 仓库：导出 git bundle，并额外导出工作区 overlay zip
 - 非 Git 项目：导出 zip
-
-## 命令
-
-- scan：扫描本地目录
-- export：扫描并输出 bundle/zip 归档，以及 manifest.json
-- import：根据 manifest.json 将归档导入到目标目录
 
 ## 说明
 
@@ -87,11 +69,21 @@ uv run code-porter --help
 - bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动
 - import 遇到已存在目录时默认跳过，可用 `--on-existing replace` 覆盖
 
-## 发布到 PyPI
+## 开发者
+
+```bash
+# 克隆仓库后，使用 uv 同步依赖
+git clone https://github.com/deali/code-porter
+cd code-porter
+uv sync
+
+# 运行
+uv run code-porter --help
+```
+
+## 发布
 
 ```bash
 uv build
 uv publish
 ```
-
-发布完成后，终端里直接执行 `uvx code-porter` 即可按需下载并运行。
