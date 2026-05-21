@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Git-first workspace migration planner for remote or local code archives"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { file = "LICENSE" }
 authors = [
 	{ name = "deali" },
 ]
@@ -12,6 +13,7 @@ classifiers = [
 	"Development Status :: 3 - Alpha",
 	"Environment :: Console",
 	"Intended Audience :: Developers",
+	"License :: OSI Approved :: Apache Software License",
 	"Programming Language :: Python :: 3",
 	"Programming Language :: Python :: 3.12",
 	"Programming Language :: Python :: 3.13",
@@ -50,6 +52,7 @@ packages = ["src/code_porter"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+	"LICENSE",
 	"README.md",
 	"src/code_porter",
 	"src/main.py",
