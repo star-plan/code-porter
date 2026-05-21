@@ -1,12 +1,13 @@
 # code-porter
 
-一个面向开发者工作区迁移的 Git 优先扫描器。它会扫描本地目录或远端 Windows 主机上的项目，判断项目类型、Git 状态、是否存在 remote、是否命中大目录/垃圾目录，以及是否值得迁移；随后可以生成或直接执行 git clone、git bundle、源码同步等迁移动作。
+一个纯本地运行的代码库导入导出工具。它会在当前机器上扫描项目，优先将 Git 仓库导出为 git bundle，将非 Git 项目导出为 zip；导出完成后，可在另一台机器上基于 manifest 批量导入。
 
 ## 技术选型
 
 - 使用 uv 管理 Python 环境与依赖
 - 使用 typer 构建 CLI
 - 使用 rich 输出表格与 JSON
+- 使用 pathspec 解析 .gitignore 规则
 
 ## 安装
 
@@ -19,26 +20,19 @@ uv sync
 扫描本地目录：
 
 ```bash
-uv run code-porter scan-local ~/code ~/lab --json-output reports/local-scan.json
+uv run code-porter scan ~/code ~/lab --json-output reports/local-scan.json
 ```
 
-扫描远端 Windows 主机：
+导出 bundle/zip 归档：
 
 ```bash
-uv run code-porter scan-remote kunkun D:/Projects C:/code --json-output reports/remote-scan.json
+uv run code-porter export ~/code ~/lab ./exports/local-backup
 ```
 
-基于扫描报告生成迁移计划：
+导入归档：
 
 ```bash
-uv run code-porter plan reports/remote-scan.json ~/code/imported --source-host kunkun --json-output reports/migration-plan.json
-```
-
-按扫描报告执行迁移：
-
-```bash
-uv run code-porter execute reports/remote-scan.json ~/code/imported --source-host kunkun --dry-run
-uv run code-porter execute reports/remote-scan.json ~/code/imported --source-host kunkun --apply
+uv run code-porter import ./exports/local-backup/manifest.json ~/code/imported
 ```
 
 输出内容包括：
@@ -50,30 +44,27 @@ uv run code-porter execute reports/remote-scan.json ~/code/imported --source-hos
 - 首个 Git remote 名称与 URL
 - work tree 是否干净
 - 目录大小
-- 是否值得迁移与原因
+- 是否值得导出与原因
 - 大目录命中情况
 - 默认忽略目录命中情况
-- 推荐迁移策略与原因
-- 对应的迁移命令模板
+- 推荐打包策略与原因
 
-## 当前策略
+## 当前打包策略
 
-- 干净且有 remote 的 Git 仓库：推荐 git clone
-- 干净但没有 remote 的 Git 仓库：推荐 git bundle
-- 脏 Git 仓库：按非 Git 项目处理，推荐 rsync/scp
-- 非 Git 项目：推荐 rsync/scp
+- 干净 Git 仓库：导出 git bundle
+- 脏 Git 仓库：导出 git bundle，并额外导出工作区 overlay zip
+- 非 Git 项目：导出 zip
 
 ## 命令
 
-- scan-local：扫描本地目录
-- scan-remote：通过 SSH + PowerShell 扫描远端 Windows 目录
-- plan：根据扫描 JSON 生成 clone、bundle、rsync 命令模板
-- execute：根据扫描 JSON 直接执行迁移，支持 dry-run
+- scan：扫描本地目录
+- export：扫描并输出 bundle/zip 归档，以及 manifest.json
+- import：根据 manifest.json 将归档导入到目标目录
 
 ## 说明
 
 - 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.git
-- scan-local 和 scan-remote 支持 `--large-dir-threshold-mb` 调整大目录阈值
-- 远端扫描依赖 SSH 可直接执行 PowerShell 与 git 命令
-- 远端非 Git 项目执行时会通过 PowerShell + robocopy + Compress-Archive 打包后再用 scp 拉回本地解压
-- 对于已存在且 remote URL 一致的目标 Git 目录，会自动将 clone 动作降级为 pull
+- scan 与 export 支持 `--large-dir-threshold-mb` 调整大目录阈值
+- 导出 zip 时会读取项目根目录的 .gitignore，并叠加默认排除目录
+- bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动
+- import 遇到已存在目录时默认跳过，可用 `--on-existing replace` 覆盖
