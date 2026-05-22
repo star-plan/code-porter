@@ -22,6 +22,19 @@ class ImportResult:
     detail: str
 
 
+@dataclass(slots=True)
+class ExportResult:
+    project_name: str
+    status: str
+    detail: str
+
+
+@dataclass(slots=True)
+class ExportOutcome:
+    manifest: ExportManifest
+    results: list[ExportResult]
+
+
 def manifest_relative_path(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
@@ -42,21 +55,41 @@ def bundle_export_unsupported_reason(project_path: Path) -> str | None:
     return None
 
 
+def format_command_error(error: subprocess.CalledProcessError) -> str:
+    stderr = (error.stderr or "").strip()
+    stdout = (error.stdout or "").strip()
+    message = stderr or stdout or str(error)
+    return f"命令失败({error.returncode}): {message}"
+
+
+def format_exception_detail(error: Exception) -> str:
+    if isinstance(error, subprocess.CalledProcessError):
+        return format_command_error(error)
+    return str(error) or error.__class__.__name__
+
+
+def cleanup_partial_destination(destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination, ignore_errors=True)
+
+
 def export_projects(
     reports: list[ProjectReport],
     output_dir: Path,
     source_roots: list[Path],
     on_project_processed: Callable[[ProjectReport, int, int], None] | None = None,
-) -> ExportManifest:
+) -> ExportOutcome:
     output_dir = output_dir.expanduser().resolve()
     artifacts_dir = output_dir / "artifacts"
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     packages: list[PackageEntry] = []
+    results: list[ExportResult] = []
     total = len(reports)
     for index, report in enumerate(reports, start=1):
         if not report.worth_exporting or report.packaging_strategy == PackagingStrategy.SKIP:
+            results.append(ExportResult(report.name, "skipped", report.worth_reason or report.packaging_reason))
             if on_project_processed is not None:
                 on_project_processed(report, index, total)
             continue
@@ -69,75 +102,78 @@ def export_projects(
         effective_reason = report.packaging_reason
         bundle_unsupported_reason = bundle_export_unsupported_reason(project_path)
 
-        if report.packaging_strategy == PackagingStrategy.BUNDLE:
-            if bundle_unsupported_reason is not None:
-                package_path = artifacts_dir / f"{slug}.zip"
-                create_zip_archive(project_path, package_path)
-                package_kind = ArchiveKind.ZIP
-                effective_strategy = PackagingStrategy.ZIP
-                effective_reason = bundle_unsupported_reason
-            else:
-                package_path = artifacts_dir / f"{slug}.bundle"
-                try:
-                    create_git_bundle(project_path, package_path)
-                    package_kind = ArchiveKind.BUNDLE
-                except subprocess.CalledProcessError:
+        try:
+            if report.packaging_strategy == PackagingStrategy.BUNDLE:
+                if bundle_unsupported_reason is not None:
                     package_path = artifacts_dir / f"{slug}.zip"
                     create_zip_archive(project_path, package_path)
                     package_kind = ArchiveKind.ZIP
                     effective_strategy = PackagingStrategy.ZIP
-                    effective_reason = "bundle 导出失败，已降级为 zip"
-        elif report.packaging_strategy == PackagingStrategy.BUNDLE_WITH_OVERLAY:
-            if bundle_unsupported_reason is not None:
-                package_path = artifacts_dir / f"{slug}.zip"
-                overlay_path = None
-                create_zip_archive(project_path, package_path)
-                package_kind = ArchiveKind.ZIP
-                effective_strategy = PackagingStrategy.ZIP
-                effective_reason = bundle_unsupported_reason
-            else:
-                package_path = artifacts_dir / f"{slug}.bundle"
-                overlay_path = artifacts_dir / f"{slug}.worktree.zip"
-                try:
-                    create_git_bundle(project_path, package_path)
-                    create_zip_archive(project_path, overlay_path)
-                    package_kind = ArchiveKind.BUNDLE
-                except subprocess.CalledProcessError:
+                    effective_reason = bundle_unsupported_reason
+                else:
+                    package_path = artifacts_dir / f"{slug}.bundle"
+                    try:
+                        create_git_bundle(project_path, package_path)
+                        package_kind = ArchiveKind.BUNDLE
+                    except subprocess.CalledProcessError:
+                        package_path = artifacts_dir / f"{slug}.zip"
+                        create_zip_archive(project_path, package_path)
+                        package_kind = ArchiveKind.ZIP
+                        effective_strategy = PackagingStrategy.ZIP
+                        effective_reason = "bundle 导出失败，已降级为 zip"
+            elif report.packaging_strategy == PackagingStrategy.BUNDLE_WITH_OVERLAY:
+                if bundle_unsupported_reason is not None:
                     package_path = artifacts_dir / f"{slug}.zip"
                     overlay_path = None
                     create_zip_archive(project_path, package_path)
                     package_kind = ArchiveKind.ZIP
                     effective_strategy = PackagingStrategy.ZIP
-                    effective_reason = "bundle 导出失败，已降级为 zip"
-        else:
-            package_path = artifacts_dir / f"{slug}.zip"
-            create_zip_archive(project_path, package_path)
-            package_kind = ArchiveKind.ZIP
-
-        packages.append(
-            PackageEntry(
-                name=report.name,
-                project_type=report.project_type,
-                source_path=report.path,
-                package_kind=package_kind,
-                package_path=manifest_relative_path(package_path, output_dir),
-                packaging_strategy=effective_strategy,
-                is_git_repo=report.is_git_repo,
-                is_clean=report.is_clean,
-                has_remote=report.has_remote,
-                size_bytes=report.size_bytes,
-                packaging_reason=effective_reason,
-                remote_url=report.remote_url,
-                overlay_path=manifest_relative_path(overlay_path, output_dir) if overlay_path else None,
-                ignored_patterns=collect_ignore_patterns(project_path),
+                    effective_reason = bundle_unsupported_reason
+                else:
+                    package_path = artifacts_dir / f"{slug}.bundle"
+                    overlay_path = artifacts_dir / f"{slug}.worktree.zip"
+                    try:
+                        create_git_bundle(project_path, package_path)
+                        create_zip_archive(project_path, overlay_path)
+                        package_kind = ArchiveKind.BUNDLE
+                    except subprocess.CalledProcessError:
+                        package_path = artifacts_dir / f"{slug}.zip"
+                        overlay_path = None
+                        create_zip_archive(project_path, package_path)
+                        package_kind = ArchiveKind.ZIP
+                        effective_strategy = PackagingStrategy.ZIP
+                        effective_reason = "bundle 导出失败，已降级为 zip"
+            else:
+                package_path = artifacts_dir / f"{slug}.zip"
+                create_zip_archive(project_path, package_path)
+                package_kind = ArchiveKind.ZIP
+            packages.append(
+                PackageEntry(
+                    name=report.name,
+                    project_type=report.project_type,
+                    source_path=report.path,
+                    package_kind=package_kind,
+                    package_path=manifest_relative_path(package_path, output_dir),
+                    packaging_strategy=effective_strategy,
+                    is_git_repo=report.is_git_repo,
+                    is_clean=report.is_clean,
+                    has_remote=report.has_remote,
+                    size_bytes=report.size_bytes,
+                    packaging_reason=effective_reason,
+                    remote_url=report.remote_url,
+                    overlay_path=manifest_relative_path(overlay_path, output_dir) if overlay_path else None,
+                    ignored_patterns=collect_ignore_patterns(project_path),
+                )
             )
-        )
+            results.append(ExportResult(report.name, "exported", effective_reason))
+        except Exception as error:
+            results.append(ExportResult(report.name, "failed", format_exception_detail(error)))
         if on_project_processed is not None:
             on_project_processed(report, index, total)
 
     manifest = ExportManifest.create([str(path) for path in source_roots], packages)
     (output_dir / "manifest.json").write_text(json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return manifest
+    return ExportOutcome(manifest=manifest, results=results)
 
 
 def import_packages(
@@ -155,28 +191,32 @@ def import_packages(
     total = len(manifest.packages)
     for index, package in enumerate(manifest.packages, start=1):
         destination = destination_root / package.name
-        if destination.exists():
-            if on_existing == "replace":
-                shutil.rmtree(destination)
-            else:
-                results.append(ImportResult(package.name, "skipped", "目标目录已存在"))
+        try:
+            if destination.exists():
+                if on_existing == "replace":
+                    shutil.rmtree(destination)
+                else:
+                    results.append(ImportResult(package.name, "skipped", "目标目录已存在"))
+                    if on_package_processed is not None:
+                        on_package_processed(package, index, total)
+                    continue
+
+            package_file = resolve_manifest_path(archive_root, package.package_path)
+            if package.package_kind == ArchiveKind.BUNDLE:
+                run_command(["git", "clone", str(package_file), str(destination)])
+                if package.overlay_path:
+                    extract_zip(resolve_manifest_path(archive_root, package.overlay_path), destination)
+                results.append(ImportResult(package.name, "imported", "bundle 导入完成"))
                 if on_package_processed is not None:
                     on_package_processed(package, index, total)
                 continue
 
-        package_file = resolve_manifest_path(archive_root, package.package_path)
-        if package.package_kind == ArchiveKind.BUNDLE:
-            run_command(["git", "clone", str(package_file), str(destination)])
-            if package.overlay_path:
-                extract_zip(resolve_manifest_path(archive_root, package.overlay_path), destination)
-            results.append(ImportResult(package.name, "imported", "bundle 导入完成"))
-            if on_package_processed is not None:
-                on_package_processed(package, index, total)
-            continue
-
-        destination.mkdir(parents=True, exist_ok=True)
-        extract_zip(package_file, destination)
-        results.append(ImportResult(package.name, "imported", "zip 导入完成"))
+            destination.mkdir(parents=True, exist_ok=True)
+            extract_zip(package_file, destination)
+            results.append(ImportResult(package.name, "imported", "zip 导入完成"))
+        except Exception as error:
+            cleanup_partial_destination(destination)
+            results.append(ImportResult(package.name, "failed", format_exception_detail(error)))
         if on_package_processed is not None:
             on_package_processed(package, index, total)
 

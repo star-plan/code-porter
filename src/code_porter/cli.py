@@ -67,6 +67,25 @@ def _write_manifest_json(payload: dict[str, object], output: Path | None) -> Non
     console.print(f"Wrote manifest JSON to {output}")
 
 
+def _render_batch_summary(title: str, rows: list[tuple[str, str, str, str]]) -> None:
+    table = Table(title=title)
+    table.add_column("Project")
+    table.add_column("Kind")
+    table.add_column("Status")
+    table.add_column("Detail")
+    for row in rows:
+        table.add_row(*row)
+    console.print(table)
+
+
+def _render_status_totals(label: str, statuses: list[str]) -> None:
+    counts: dict[str, int] = {}
+    for status in statuses:
+        counts[status] = counts.get(status, 0) + 1
+    summary = ", ".join(f"{status}={count}" for status, count in sorted(counts.items())) or "no items"
+    console.print(f"{label}: {summary}")
+
+
 @app.command("scan")
 def scan(
     roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
@@ -133,7 +152,7 @@ def export(
     _render_reports(reports)
 
     if no_progress:
-        manifest = export_projects(
+        outcome = export_projects(
             reports,
             output_dir=output_dir,
             source_roots=roots,
@@ -153,14 +172,32 @@ def export(
             def on_project_processed(report: ProjectReport, completed: int, total: int) -> None:
                 progress.update(export_task, completed=completed, total=total, current=report.name)
 
-            manifest = export_projects(
+            outcome = export_projects(
                 reports,
                 output_dir=output_dir,
                 source_roots=roots,
                 on_project_processed=on_project_processed,
             )
 
-    console.print(f"Exported {len(manifest.packages)} package(s) to {output_dir}")
+    manifest = outcome.manifest
+    _render_batch_summary(
+        "Export Result",
+        [
+            (item.project_name, package_index.get(item.project_name, "-"), item.status, item.detail)
+            for item, package_index in [
+                (
+                    result,
+                    {
+                        package.name: package.package_kind.value
+                        for package in manifest.packages
+                    },
+                )
+                for result in outcome.results
+            ]
+        ],
+    )
+    _render_status_totals("Export summary", [item.status for item in outcome.results])
+    console.print(f"Wrote {len(manifest.packages)} package(s) to {output_dir}")
     if manifest_output is not None:
         _write_manifest_json(manifest.to_dict(), manifest_output)
 
@@ -203,16 +240,15 @@ def import_archives(
                 on_package_processed=on_package_processed,
             )
 
-    table = Table(title="Import Result")
-    table.add_column("Project")
-    table.add_column("Kind")
-    table.add_column("Status")
-    table.add_column("Detail")
     package_index = {item.name: item for item in manifest.packages}
-    for item in results:
-        package = package_index[item.project_name]
-        table.add_row(item.project_name, package.package_kind.value, item.status, item.detail)
-    console.print(table)
+    _render_batch_summary(
+        "Import Result",
+        [
+            (item.project_name, package_index[item.project_name].package_kind.value, item.status, item.detail)
+            for item in results
+        ],
+    )
+    _render_status_totals("Import summary", [item.status for item in results])
 
 
 def main() -> None:

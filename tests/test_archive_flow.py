@@ -3,6 +3,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import code_porter.archive as archive_module
 from code_porter.archive import export_projects, import_packages, load_manifest
 from code_porter.models import ArchiveKind, PackagingStrategy, ProjectType
 from code_porter.scanner import default_scan_options, scan_local_roots
@@ -42,10 +43,12 @@ def test_export_creates_bundle_for_clean_git_repo(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(project_dir), "commit", "-m", "init"], check=True, capture_output=True, text=True)
 
     reports = scan_local_roots([tmp_path], default_scan_options())
-    manifest = export_projects(reports, tmp_path / "exported", [tmp_path])
+    outcome = export_projects(reports, tmp_path / "exported", [tmp_path])
+    manifest = outcome.manifest
 
     assert len(manifest.packages) == 1
     package = manifest.packages[0]
+    assert outcome.results[0].status == "exported"
     assert package.package_kind == ArchiveKind.BUNDLE
     assert package.packaging_strategy == PackagingStrategy.BUNDLE
     assert (tmp_path / "exported" / package.package_path).exists()
@@ -62,7 +65,8 @@ def test_export_creates_overlay_for_dirty_git_repo(tmp_path: Path) -> None:
     source_file.write_text("print('v2')\n", encoding="utf-8")
 
     reports = scan_local_roots([tmp_path], default_scan_options())
-    manifest = export_projects(reports, tmp_path / "exported", [tmp_path])
+    outcome = export_projects(reports, tmp_path / "exported", [tmp_path])
+    manifest = outcome.manifest
 
     package = manifest.packages[0]
     assert package.packaging_strategy == PackagingStrategy.BUNDLE_WITH_OVERLAY
@@ -84,7 +88,8 @@ def test_import_restores_dirty_worktree_overlay(tmp_path: Path) -> None:
 
     reports = scan_local_roots([tmp_path], default_scan_options())
     export_dir = tmp_path / "exported"
-    manifest = export_projects(reports, export_dir, [tmp_path])
+    outcome = export_projects(reports, export_dir, [tmp_path])
+    manifest = outcome.manifest
 
     package = manifest.packages[0]
     assert package.overlay_path is not None
@@ -108,7 +113,8 @@ def test_export_falls_back_to_zip_for_git_repo_without_commits(tmp_path: Path) -
     assert len(reports) == 1
     assert reports[0].packaging_strategy == PackagingStrategy.ZIP
 
-    manifest = export_projects(reports, tmp_path / "exported", [tmp_path])
+    outcome = export_projects(reports, tmp_path / "exported", [tmp_path])
+    manifest = outcome.manifest
     package = manifest.packages[0]
 
     assert package.package_kind == ArchiveKind.ZIP
@@ -139,7 +145,8 @@ def test_export_falls_back_to_zip_for_shallow_git_repo(tmp_path: Path) -> None:
     assert reports[0].packaging_strategy == PackagingStrategy.ZIP
     assert reports[0].packaging_reason == "Git 仓库为浅克隆，bundle 无法保证完整，导出 zip"
 
-    manifest = export_projects(reports, tmp_path / "exported", [shallow_dir])
+    outcome = export_projects(reports, tmp_path / "exported", [shallow_dir])
+    manifest = outcome.manifest
     package = manifest.packages[0]
 
     assert package.package_kind == ArchiveKind.ZIP
@@ -167,7 +174,8 @@ def test_export_zip_honors_gitignore_and_default_excludes(tmp_path: Path) -> Non
     (node_modules / "left-pad.js").write_text("module.exports = 1\n", encoding="utf-8")
 
     reports = scan_local_roots([tmp_path], default_scan_options())
-    manifest = export_projects(reports, tmp_path / "exported", [tmp_path])
+    outcome = export_projects(reports, tmp_path / "exported", [tmp_path])
+    manifest = outcome.manifest
     package = manifest.packages[0]
 
     with zipfile.ZipFile(tmp_path / "exported" / package.package_path, "r") as zip_file:
@@ -243,3 +251,60 @@ def test_manifest_is_loadable(tmp_path: Path) -> None:
     manifest = load_manifest(export_dir / "manifest.json")
     assert json.loads((export_dir / "manifest.json").read_text(encoding="utf-8"))["version"] == 1
     assert manifest.packages[0].name == "zip-app"
+
+
+def test_export_continues_after_project_failure(tmp_path: Path, monkeypatch) -> None:
+    broken_dir = tmp_path / "broken-app"
+    broken_dir.mkdir()
+    (broken_dir / "package.json").write_text('{"name":"broken-app"}\n', encoding="utf-8")
+
+    ok_dir = tmp_path / "ok-app"
+    ok_dir.mkdir()
+    (ok_dir / "package.json").write_text('{"name":"ok-app"}\n', encoding="utf-8")
+    (ok_dir / "index.js").write_text("console.log('ok')\n", encoding="utf-8")
+
+    original_create_zip_archive = archive_module.create_zip_archive
+
+    def flaky_create_zip_archive(project_path: Path, archive_path: Path) -> None:
+        if project_path.name == "broken-app":
+            raise OSError("disk read error")
+        original_create_zip_archive(project_path, archive_path)
+
+    monkeypatch.setattr(archive_module, "create_zip_archive", flaky_create_zip_archive)
+
+    reports = scan_local_roots([tmp_path], default_scan_options())
+    outcome = export_projects(reports, tmp_path / "exported", [tmp_path])
+
+    statuses = {item.project_name: item.status for item in outcome.results}
+    assert statuses["broken-app"] == "failed"
+    assert statuses["ok-app"] == "exported"
+    assert [package.name for package in outcome.manifest.packages] == ["ok-app"]
+
+
+def test_import_continues_after_package_failure(tmp_path: Path) -> None:
+    git_project = tmp_path / "git-app"
+    git_project.mkdir()
+    init_git_repo(git_project)
+    (git_project / "pyproject.toml").write_text("[project]\nname='git-app'\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(git_project), "add", "pyproject.toml"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(git_project), "commit", "-m", "init"], check=True, capture_output=True, text=True)
+
+    zip_project = tmp_path / "zip-app"
+    zip_project.mkdir()
+    (zip_project / "package.json").write_text('{"name":"zip-app"}\n', encoding="utf-8")
+    (zip_project / "index.js").write_text("console.log('hi')\n", encoding="utf-8")
+
+    reports = scan_local_roots([tmp_path], default_scan_options())
+    export_dir = tmp_path / "exported"
+    outcome = export_projects(reports, export_dir, [tmp_path])
+
+    broken_bundle = export_dir / outcome.manifest.packages[0].package_path
+    broken_bundle.write_text("not a git bundle\n", encoding="utf-8")
+
+    results = import_packages(export_dir / "manifest.json", tmp_path / "imported")
+
+    statuses = {item.project_name: item.status for item in results}
+    assert statuses["git-app"] == "failed"
+    assert statuses["zip-app"] == "imported"
+    assert not (tmp_path / "imported" / "git-app").exists()
+    assert (tmp_path / "imported" / "zip-app" / "index.js").exists()
