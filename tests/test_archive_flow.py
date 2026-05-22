@@ -116,6 +116,42 @@ def test_export_falls_back_to_zip_for_git_repo_without_commits(tmp_path: Path) -
     assert (tmp_path / "exported" / package.package_path).exists()
 
 
+def test_export_falls_back_to_zip_for_shallow_git_repo(tmp_path: Path) -> None:
+    origin_dir = tmp_path / "origin"
+    origin_dir.mkdir()
+    init_git_repo(origin_dir)
+    source_file = origin_dir / "app.py"
+    source_file.write_text("print('v1')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(origin_dir), "add", "app.py"], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(origin_dir), "commit", "-m", "init"], check=True, capture_output=True, text=True)
+    source_file.write_text("print('v2')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(origin_dir), "commit", "-am", "update"], check=True, capture_output=True, text=True)
+
+    shallow_dir = tmp_path / "shallow-app"
+    subprocess.run(
+        ["git", "clone", "--depth=1", f"file://{origin_dir}", str(shallow_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    reports = scan_local_roots([shallow_dir], default_scan_options())
+    assert reports[0].packaging_strategy == PackagingStrategy.ZIP
+    assert reports[0].packaging_reason == "Git 仓库为浅克隆，bundle 无法保证完整，导出 zip"
+
+    manifest = export_projects(reports, tmp_path / "exported", [shallow_dir])
+    package = manifest.packages[0]
+
+    assert package.package_kind == ArchiveKind.ZIP
+    assert package.packaging_strategy == PackagingStrategy.ZIP
+    assert package.packaging_reason == "Git 仓库为浅克隆，bundle 无法保证完整，导出 zip"
+
+    results = import_packages(tmp_path / "exported" / "manifest.json", tmp_path / "imported")
+
+    assert results[0].status == "imported"
+    assert (tmp_path / "imported" / "shallow-app" / "app.py").read_text(encoding="utf-8") == "print('v2')\n"
+
+
 def test_export_zip_honors_gitignore_and_default_excludes(tmp_path: Path) -> None:
     project_dir = tmp_path / "zip-app"
     project_dir.mkdir()

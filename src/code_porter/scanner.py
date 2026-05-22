@@ -116,9 +116,10 @@ def inspect_local_project(path: Path, project_type: ProjectType, options: ScanOp
     is_git_repo = git_dir.exists()
     remote_name, remote_url, has_remote, is_clean = inspect_local_git_state(path, is_git_repo)
     has_commits = git_has_commits(path, is_git_repo)
+    is_shallow = git_is_shallow(path, is_git_repo)
 
     size_bytes, large_directories, ignored_present = summarize_directory(path, options)
-    packaging_strategy, packaging_reason = choose_packaging_strategy(is_git_repo, is_clean, has_commits)
+    packaging_strategy, packaging_reason = choose_packaging_strategy(is_git_repo, is_clean, has_commits, is_shallow)
     worth_exporting, worth_reason = assess_export_value(packaging_strategy, size_bytes)
 
     return ProjectReport(
@@ -168,6 +169,13 @@ def git_has_commits(path: Path, is_git_repo: bool) -> bool:
     return result.returncode == 0
 
 
+def git_is_shallow(path: Path, is_git_repo: bool) -> bool:
+    if not is_git_repo:
+        return False
+    result = run_git(path, ["rev-parse", "--is-shallow-repository"])
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
 def summarize_directory(path: Path, options: ScanOptions) -> tuple[int, list[str], list[str]]:
     total_size = 0
     directory_sizes: dict[str, int] = {}
@@ -198,9 +206,12 @@ def choose_packaging_strategy(
     is_git_repo: bool,
     is_clean: bool | None,
     has_commits: bool,
+    is_shallow: bool,
 ) -> tuple[PackagingStrategy, str]:
     if is_git_repo and not has_commits:
         return PackagingStrategy.ZIP, "Git 仓库尚无提交，无法创建 bundle，导出 zip"
+    if is_git_repo and is_shallow:
+        return PackagingStrategy.ZIP, "Git 仓库为浅克隆，bundle 无法保证完整，导出 zip"
     if is_git_repo and is_clean:
         return PackagingStrategy.BUNDLE, "Git 仓库干净，导出 git bundle"
     if is_git_repo and is_clean is False:

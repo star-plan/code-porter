@@ -30,6 +30,18 @@ def resolve_manifest_path(archive_root: Path, manifest_path: str) -> Path:
     return archive_root / Path(manifest_path.replace("\\", "/"))
 
 
+def bundle_export_unsupported_reason(project_path: Path) -> str | None:
+    shallow_result = subprocess.run(
+        ["git", "-C", str(project_path), "rev-parse", "--is-shallow-repository"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shallow_result.returncode == 0 and shallow_result.stdout.strip() == "true":
+        return "Git 仓库为浅克隆，bundle 无法保证完整，已降级为 zip"
+    return None
+
+
 def export_projects(
     reports: list[ProjectReport],
     output_dir: Path,
@@ -55,32 +67,48 @@ def export_projects(
         overlay_path: Path | None = None
         effective_strategy = report.packaging_strategy
         effective_reason = report.packaging_reason
+        bundle_unsupported_reason = bundle_export_unsupported_reason(project_path)
 
         if report.packaging_strategy == PackagingStrategy.BUNDLE:
-            package_path = artifacts_dir / f"{slug}.bundle"
-            try:
-                create_git_bundle(project_path, package_path)
-                package_kind = ArchiveKind.BUNDLE
-            except subprocess.CalledProcessError:
+            if bundle_unsupported_reason is not None:
                 package_path = artifacts_dir / f"{slug}.zip"
                 create_zip_archive(project_path, package_path)
                 package_kind = ArchiveKind.ZIP
                 effective_strategy = PackagingStrategy.ZIP
-                effective_reason = "bundle 导出失败，已降级为 zip"
+                effective_reason = bundle_unsupported_reason
+            else:
+                package_path = artifacts_dir / f"{slug}.bundle"
+                try:
+                    create_git_bundle(project_path, package_path)
+                    package_kind = ArchiveKind.BUNDLE
+                except subprocess.CalledProcessError:
+                    package_path = artifacts_dir / f"{slug}.zip"
+                    create_zip_archive(project_path, package_path)
+                    package_kind = ArchiveKind.ZIP
+                    effective_strategy = PackagingStrategy.ZIP
+                    effective_reason = "bundle 导出失败，已降级为 zip"
         elif report.packaging_strategy == PackagingStrategy.BUNDLE_WITH_OVERLAY:
-            package_path = artifacts_dir / f"{slug}.bundle"
-            overlay_path = artifacts_dir / f"{slug}.worktree.zip"
-            try:
-                create_git_bundle(project_path, package_path)
-                create_zip_archive(project_path, overlay_path)
-                package_kind = ArchiveKind.BUNDLE
-            except subprocess.CalledProcessError:
+            if bundle_unsupported_reason is not None:
                 package_path = artifacts_dir / f"{slug}.zip"
                 overlay_path = None
                 create_zip_archive(project_path, package_path)
                 package_kind = ArchiveKind.ZIP
                 effective_strategy = PackagingStrategy.ZIP
-                effective_reason = "bundle 导出失败，已降级为 zip"
+                effective_reason = bundle_unsupported_reason
+            else:
+                package_path = artifacts_dir / f"{slug}.bundle"
+                overlay_path = artifacts_dir / f"{slug}.worktree.zip"
+                try:
+                    create_git_bundle(project_path, package_path)
+                    create_zip_archive(project_path, overlay_path)
+                    package_kind = ArchiveKind.BUNDLE
+                except subprocess.CalledProcessError:
+                    package_path = artifacts_dir / f"{slug}.zip"
+                    overlay_path = None
+                    create_zip_archive(project_path, package_path)
+                    package_kind = ArchiveKind.ZIP
+                    effective_strategy = PackagingStrategy.ZIP
+                    effective_reason = "bundle 导出失败，已降级为 zip"
         else:
             package_path = artifacts_dir / f"{slug}.zip"
             create_zip_archive(project_path, package_path)
