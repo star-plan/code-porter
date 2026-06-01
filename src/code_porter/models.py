@@ -65,6 +65,28 @@ class ProjectReport:
 
 
 @dataclass(slots=True)
+class SafetyReport:
+    name: str
+    path: str
+    project_type: ProjectType
+    is_git_repo: bool
+    has_remote: bool
+    remote_url: str | None
+    is_clean: bool | None
+    current_branch: str | None
+    upstream_branch: str | None
+    unpushed_commit_count: int
+    unpushed_commits: list[str]
+    status: str  # "ok" | "warning" | "danger"
+    issues: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        data = asdict(self)
+        data["project_type"] = self.project_type.value
+        return data
+
+
+@dataclass(slots=True)
 class PackageEntry:
     name: str
     project_type: ProjectType

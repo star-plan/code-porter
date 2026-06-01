@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import PackagingStrategy, ProjectReport, ProjectType
+from .models import PackagingStrategy, ProjectReport, ProjectType, SafetyReport
 
 MARKERS: dict[str, ProjectType] = {
     "package.json": ProjectType.NODE,
@@ -30,22 +30,24 @@ DEFAULT_EXCLUDES = {
 class ScanOptions:
     excludes: set[str]
     large_dir_threshold_mb: int = 500
+    depth: int | None = None
 
 
 def default_scan_options(
     extra_excludes: list[str] | None = None,
     large_dir_threshold_mb: int = 500,
+    depth: int | None = None,
 ) -> ScanOptions:
     excludes = set(DEFAULT_EXCLUDES)
     if extra_excludes:
         excludes.update(item for item in extra_excludes if item)
-    return ScanOptions(excludes=excludes, large_dir_threshold_mb=large_dir_threshold_mb)
+    return ScanOptions(excludes=excludes, large_dir_threshold_mb=large_dir_threshold_mb, depth=depth)
 
 
 def scan_local_roots(paths: list[Path], options: ScanOptions) -> list[ProjectReport]:
     project_roots: dict[Path, ProjectType] = {}
     for root in paths:
-        for candidate, project_type in discover_projects(root, options.excludes).items():
+        for candidate, project_type in discover_projects(root, options.excludes, options.depth).items():
             current_type = project_roots.get(candidate)
             if current_type is None or current_type == ProjectType.UNKNOWN:
                 project_roots[candidate] = project_type
@@ -60,7 +62,7 @@ def scan_local_roots_with_progress(
     project_roots: dict[Path, ProjectType] = {}
     total = len(paths)
     for index, root in enumerate(paths, start=1):
-        for candidate, project_type in discover_projects(root, options.excludes).items():
+        for candidate, project_type in discover_projects(root, options.excludes, options.depth).items():
             current_type = project_roots.get(candidate)
             if current_type is None or current_type == ProjectType.UNKNOWN:
                 project_roots[candidate] = project_type
@@ -69,12 +71,19 @@ def scan_local_roots_with_progress(
     return [inspect_local_project(path, project_roots[path], options) for path in sorted(project_roots)]
 
 
-def discover_projects(root: Path, excludes: set[str]) -> dict[Path, ProjectType]:
+def discover_projects(root: Path, excludes: set[str], depth: int | None = None) -> dict[Path, ProjectType]:
     if not root.exists():
         raise FileNotFoundError(f"Scan root does not exist: {root}")
 
     project_roots: dict[Path, ProjectType] = {}
     for current_path, dir_names, file_names in root.walk(top_down=True):
+        if depth is not None:
+            relative = current_path.relative_to(root)
+            current_depth = 0 if str(relative) == "." else len(relative.parts)
+            if current_depth > depth:
+                dir_names.clear()
+                continue
+
         has_git_dir = ".git" in dir_names
         dir_names[:] = [name for name in dir_names if name not in excludes]
         file_set = set(file_names)
@@ -227,6 +236,113 @@ def assess_export_value(strategy: PackagingStrategy, size_bytes: int) -> tuple[b
     if size_bytes <= 0:
         return False, "目录为空，不建议导出"
     return True, "满足导出条件"
+
+
+def check_local_roots(paths: list[Path], options: ScanOptions) -> list[SafetyReport]:
+    project_roots: dict[Path, ProjectType] = {}
+    for root in paths:
+        for candidate, project_type in discover_projects(root, options.excludes, options.depth).items():
+            current_type = project_roots.get(candidate)
+            if current_type is None or current_type == ProjectType.UNKNOWN:
+                project_roots[candidate] = project_type
+    return [check_safety(path, project_roots[path]) for path in sorted(project_roots)]
+
+
+def check_local_roots_with_progress(
+    paths: list[Path],
+    options: ScanOptions,
+    on_root_scanned: Callable[[Path, int, int], None] | None = None,
+) -> list[SafetyReport]:
+    project_roots: dict[Path, ProjectType] = {}
+    total = len(paths)
+    for index, root in enumerate(paths, start=1):
+        for candidate, project_type in discover_projects(root, options.excludes, options.depth).items():
+            current_type = project_roots.get(candidate)
+            if current_type is None or current_type == ProjectType.UNKNOWN:
+                project_roots[candidate] = project_type
+        if on_root_scanned is not None:
+            on_root_scanned(root, index, total)
+    return [check_safety(path, project_roots[path]) for path in sorted(project_roots)]
+
+
+def check_safety(path: Path, project_type: ProjectType) -> SafetyReport:
+    git_dir = path / ".git"
+    is_git_repo = git_dir.exists()
+
+    remote_name, remote_url, has_remote, is_clean = inspect_local_git_state(path, is_git_repo)
+
+    current_branch = git_current_branch(path, is_git_repo)
+    upstream_branch = git_upstream_branch(path, is_git_repo)
+    unpushed_count, unpushed_commits = git_unpushed_commits(path, is_git_repo, upstream_branch)
+
+    issues: list[str] = []
+    if not is_git_repo:
+        issues.append("不是 Git 仓库，无法 push 到远程")
+    if is_git_repo and not has_remote:
+        issues.append("没有远程仓库，无法 push")
+    if is_git_repo and has_remote and upstream_branch is None and git_has_commits(path, is_git_repo):
+        issues.append("当前分支没有追踪远程分支")
+    if is_clean is False:
+        issues.append("工作区有未提交的更改")
+    if unpushed_count > 0:
+        issues.append(f"有 {unpushed_count} 个 commit 未 push 到远程")
+
+    if not is_git_repo:
+        status = "danger"
+    elif unpushed_count > 0:
+        status = "danger"
+    elif not has_remote:
+        status = "danger"
+    elif upstream_branch is None and git_has_commits(path, is_git_repo):
+        status = "warning"
+    elif is_clean is False:
+        status = "warning"
+    else:
+        status = "ok"
+
+    return SafetyReport(
+        name=path.name,
+        path=str(path),
+        project_type=project_type,
+        is_git_repo=is_git_repo,
+        has_remote=has_remote,
+        remote_url=remote_url,
+        is_clean=is_clean,
+        current_branch=current_branch,
+        upstream_branch=upstream_branch,
+        unpushed_commit_count=unpushed_count,
+        unpushed_commits=unpushed_commits,
+        status=status,
+        issues=issues,
+    )
+
+
+def git_current_branch(path: Path, is_git_repo: bool) -> str | None:
+    if not is_git_repo:
+        return None
+    result = run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if result.returncode == 0:
+        return result.stdout.strip() or None
+    return None
+
+
+def git_upstream_branch(path: Path, is_git_repo: bool) -> str | None:
+    if not is_git_repo:
+        return None
+    result = run_git(path, ["rev-parse", "--abbrev-ref", "@{u}"])
+    if result.returncode == 0:
+        return result.stdout.strip() or None
+    return None
+
+
+def git_unpushed_commits(path: Path, is_git_repo: bool, upstream_branch: str | None) -> tuple[int, list[str]]:
+    if not is_git_repo or upstream_branch is None:
+        return 0, []
+    result = run_git(path, ["rev-list", f"{upstream_branch}..HEAD", "--oneline"])
+    if result.returncode != 0:
+        return 0, []
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    return len(lines), lines[:5]
 
 
 def run_git(path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:

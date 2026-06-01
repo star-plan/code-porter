@@ -9,8 +9,8 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 from rich.table import Table
 
 from .archive import export_projects, import_packages, load_manifest
-from .models import ProjectReport
-from .scanner import default_scan_options, scan_local_roots_with_progress
+from .models import ProjectReport, ProjectType, SafetyReport
+from .scanner import check_local_roots_with_progress, default_scan_options, scan_local_roots_with_progress
 
 app = typer.Typer(help="Local code archive importer/exporter")
 console = Console()
@@ -46,6 +46,53 @@ def _render_reports(reports: list[ProjectReport]) -> None:
             report.packaging_reason,
         )
     console.print(table)
+
+
+def _render_safety_reports(reports: list[SafetyReport]) -> None:
+    table = Table(title="Pre-Reformat Safety Check")
+    table.add_column("Name")
+    table.add_column("Type")
+    table.add_column("Git")
+    table.add_column("Remote")
+    table.add_column("Branch")
+    table.add_column("Clean")
+    table.add_column("Unpushed")
+    table.add_column("Issues")
+
+    status_style = {"ok": "green", "warning": "yellow", "danger": "red"}
+
+    for report in reports:
+        clean = "-" if report.is_clean is None else ("✓" if report.is_clean else "✗")
+        git = "✓" if report.is_git_repo else "✗"
+        remote = "✓" if report.has_remote else "✗"
+        branch = report.current_branch or "-"
+        unpushed = str(report.unpushed_commit_count) if report.is_git_repo and report.has_remote else "-"
+        issues = "; ".join(report.issues) if report.issues else "✓ all good"
+        style = status_style.get(report.status, "")
+
+        table.add_row(
+            f"[{style}]{report.name}[/{style}]",
+            report.project_type.value if report.project_type != ProjectType.UNKNOWN else "-",
+            f"[{style}]{git}[/{style}]" if not report.is_git_repo else git,
+            f"[{style}]{remote}[/{style}]" if not report.has_remote else remote,
+            branch,
+            f"[{style}]{clean}[/{style}]" if report.is_clean is False else clean,
+            f"[{style}]{unpushed}[/{style}]" if report.unpushed_commit_count > 0 else unpushed,
+            f"[{style}]{issues}[/{style}]",
+        )
+
+    console.print(table)
+
+    ok_count = sum(1 for r in reports if r.status == "ok")
+    warning_count = sum(1 for r in reports if r.status == "warning")
+    danger_count = sum(1 for r in reports if r.status == "danger")
+    total = len(reports)
+    console.print(
+        f"Checked {total} project(s): "
+        f"[green]{ok_count} ok[/green], "
+        f"[yellow]{warning_count} warning[/yellow], "
+        f"[red]{danger_count} danger[/red]"
+    )
 
 
 def _write_json(reports: list[ProjectReport], output: Path | None) -> None:
@@ -91,11 +138,12 @@ def scan(
     roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
     exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to exclude"),
     large_dir_threshold_mb: int = typer.Option(500, "--large-dir-threshold-mb", min=1, help="Mark top-level directories larger than this threshold"),
+    depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to scan from each root"),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write scan result to a JSON file"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
 ) -> None:
     """Scan local folders and classify archive packaging strategy."""
-    options = default_scan_options(exclude, large_dir_threshold_mb)
+    options = default_scan_options(exclude, large_dir_threshold_mb, depth)
     
     if no_progress:
         reports = scan_local_roots_with_progress(roots, options, None)
@@ -119,17 +167,55 @@ def scan(
     _write_json(reports, json_output)
 
 
+@app.command("check")
+def check(
+    roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
+    exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to exclude"),
+    depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to scan from each root"),
+    json_output: Path | None = typer.Option(None, "--json-output", help="Write check result to a JSON file"),
+    no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
+) -> None:
+    """Check if all projects are safe before reformatting. Flags unpushed commits, missing remotes, and dirty worktrees."""
+    options = default_scan_options(exclude, depth=depth)
+
+    if no_progress:
+        reports = check_local_roots_with_progress(roots, options, None)
+    else:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TextColumn("{task.fields[current]}", justify="left"),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Checking roots", total=len(roots), current="")
+
+            def on_root_scanned(root: Path, completed: int, total: int) -> None:
+                progress.update(task_id, completed=completed, total=total, current=str(root))
+
+            reports = check_local_roots_with_progress(roots, options, on_root_scanned)
+
+    _render_safety_reports(reports)
+    if json_output is not None:
+        payload = [report.to_dict() for report in reports]
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        json_output.write_text(text + "\n", encoding="utf-8")
+        console.print(f"Wrote JSON report to {json_output}")
+
+
 @app.command("export")
 def export(
     roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
     output_dir: Path = typer.Argument(..., resolve_path=True, help="Directory for manifest and archive artifacts"),
     exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to exclude"),
     large_dir_threshold_mb: int = typer.Option(500, "--large-dir-threshold-mb", min=1, help="Mark top-level directories larger than this threshold"),
+    depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to scan from each root"),
     manifest_output: Path | None = typer.Option(None, "--manifest-output", help="Optional extra path to write manifest JSON"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
 ) -> None:
     """Scan local folders and export bundle/zip archives."""
-    options = default_scan_options(exclude, large_dir_threshold_mb)
+    options = default_scan_options(exclude, large_dir_threshold_mb, depth)
     
     if no_progress:
         reports = scan_local_roots_with_progress(roots, options, None)

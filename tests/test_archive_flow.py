@@ -308,3 +308,35 @@ def test_import_continues_after_package_failure(tmp_path: Path) -> None:
     assert statuses["zip-app"] == "imported"
     assert not (tmp_path / "imported" / "git-app").exists()
     assert (tmp_path / "imported" / "zip-app" / "index.js").exists()
+
+
+def test_scan_respects_depth_limit(tmp_path: Path) -> None:
+    # depth 1: direct child project should be found
+    shallow = tmp_path / "shallow-app"
+    shallow.mkdir()
+    init_git_repo(shallow)
+    (shallow / "pyproject.toml").write_text("[project]\nname='shallow-app'\n", encoding="utf-8")
+
+    # depth 3: nested project should only be found with depth >= 3
+    deep = tmp_path / "workspace" / "repos" / "deep-app"
+    deep.mkdir(parents=True)
+    init_git_repo(deep)
+    (deep / "package.json").write_text('{"name":"deep-app"}\n', encoding="utf-8")
+
+    # depth=1 finds only the direct child
+    reports = scan_local_roots([tmp_path], default_scan_options(depth=1))
+    names = {r.name for r in reports}
+    assert "shallow-app" in names
+    assert "deep-app" not in names
+
+    # depth=3 finds both
+    reports = scan_local_roots([tmp_path], default_scan_options(depth=3))
+    names = {r.name for r in reports}
+    assert "shallow-app" in names
+    assert "deep-app" in names
+
+    # no depth limit finds both
+    reports = scan_local_roots([tmp_path], default_scan_options())
+    names = {r.name for r in reports}
+    assert "shallow-app" in names
+    assert "deep-app" in names
