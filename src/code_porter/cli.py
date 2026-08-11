@@ -16,36 +16,114 @@ app = typer.Typer(help="Local code archive importer/exporter")
 console = Console()
 
 
-def _render_reports(reports: list[ProjectReport]) -> None:
+def _report_row_style(report: ProjectReport) -> str:
+    """Pick a Rich style for a scan row based on export risk."""
+    if not report.worth_exporting or report.packaging_strategy.value == "skip":
+        return "yellow"
+    if report.is_git_repo and report.is_clean is False:
+        return "yellow"
+    if report.is_git_repo and not report.has_remote:
+        return "yellow"
+    return ""
+
+
+def _format_git_cell(report: ProjectReport) -> str:
+    """Render a compact Git status cell (repo / remote / clean)."""
+    if not report.is_git_repo:
+        return "no"
+    parts = ["yes"]
+    parts.append("remote" if report.has_remote else "no-remote")
+    if report.is_clean is None:
+        parts.append("clean?")
+    elif report.is_clean:
+        parts.append("clean")
+    else:
+        parts.append("dirty")
+    return " / ".join(parts)
+
+
+def _truncate(text: str, max_len: int = 48) -> str:
+    """Truncate long reason text so the default table stays readable."""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def _render_reports(reports: list[ProjectReport], *, verbose: bool = False) -> None:
+    """Render project scan results as a table.
+
+    Default mode keeps columns compact for terminal scanning.
+    Verbose mode adds remote/clean details, large/ignored dirs, and full reasons.
+    """
     table = Table(title="Archive Candidates")
     table.add_column("Name")
     table.add_column("Type")
     table.add_column("Git")
-    table.add_column("Remote")
-    table.add_column("Clean")
-    table.add_column("Export")
+    if verbose:
+        table.add_column("Remote")
+        table.add_column("Clean")
     table.add_column("Size")
-    table.add_column("Large Dirs")
-    table.add_column("Ignored")
     table.add_column("Package")
-    table.add_column("Reason")
+    table.add_column("Export")
+    if verbose:
+        table.add_column("Large Dirs")
+        table.add_column("Ignored")
+        table.add_column("Reason")
+    else:
+        table.add_column("Note")
 
     for report in reports:
-        clean = "unknown" if report.is_clean is None else ("yes" if report.is_clean else "no")
-        table.add_row(
-            report.name,
-            report.project_type.value,
-            "yes" if report.is_git_repo else "no",
-            "yes" if report.has_remote else "no",
-            clean,
-            "yes" if report.worth_exporting else "no",
-            report.size_human,
-            ", ".join(report.large_directories) or "-",
-            ", ".join(report.ignored_directories_present) or "-",
-            report.packaging_strategy.value,
-            report.packaging_reason,
-        )
+        style = _report_row_style(report)
+        name = f"[{style}]{report.name}[/{style}]" if style else report.name
+        export_cell = "yes" if report.worth_exporting else "no"
+        if style and not report.worth_exporting:
+            export_cell = f"[{style}]{export_cell}[/{style}]"
+
+        if verbose:
+            clean = "unknown" if report.is_clean is None else ("yes" if report.is_clean else "no")
+            table.add_row(
+                name,
+                report.project_type.value,
+                "yes" if report.is_git_repo else "no",
+                "yes" if report.has_remote else "no",
+                clean,
+                report.size_human,
+                report.packaging_strategy.value,
+                export_cell,
+                ", ".join(report.large_directories) or "-",
+                ", ".join(report.ignored_directories_present) or "-",
+                report.packaging_reason or report.worth_reason or "-",
+            )
+        else:
+            note = report.worth_reason if not report.worth_exporting else report.packaging_reason
+            table.add_row(
+                name,
+                report.project_type.value,
+                _format_git_cell(report),
+                report.size_human,
+                report.packaging_strategy.value,
+                export_cell,
+                _truncate(note) or "-",
+            )
     console.print(table)
+
+
+def _render_scan_summary(reports: list[ProjectReport]) -> None:
+    """Print a one-line summary of scan results for quick overview."""
+    total = len(reports)
+    strategy_counts: dict[str, int] = {}
+    for report in reports:
+        key = report.packaging_strategy.value
+        strategy_counts[key] = strategy_counts.get(key, 0) + 1
+    worth = sum(1 for report in reports if report.worth_exporting)
+    skip = total - worth
+    strategy_part = ", ".join(f"{name}={count}" for name, count in sorted(strategy_counts.items())) or "none"
+    console.print(
+        f"Found {total} project(s): {strategy_part}; "
+        f"[green]{worth} worth exporting[/green]"
+        + (f", [yellow]{skip} skip/review[/yellow]" if skip else ""),
+        highlight=False,
+    )
 
 
 def _render_safety_reports(reports: list[SafetyReport]) -> None:
@@ -95,13 +173,16 @@ def _render_safety_reports(reports: list[SafetyReport]) -> None:
     )
 
 
-def _write_json(reports: list[ProjectReport], output: Path | None) -> None:
+def _reports_to_json_text(reports: list[ProjectReport] | list[SafetyReport]) -> str:
+    """Serialize project/safety reports to pretty-printed JSON text."""
     payload = [report.to_dict() for report in reports]
-    text = json.dumps(payload, ensure_ascii=False, indent=2)
-    if output is None:
-        console.print_json(text)
-        return
-    output.write_text(text + "\n", encoding="utf-8")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _write_json_file(reports: list[ProjectReport] | list[SafetyReport], output: Path) -> None:
+    """Write scan/check reports to a JSON file and print a short confirmation."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_reports_to_json_text(reports) + "\n", encoding="utf-8")
     console.print(f"Wrote JSON report to {output}")
 
 
@@ -140,12 +221,16 @@ def scan(
     large_dir_threshold_mb: int = typer.Option(500, "--large-dir-threshold-mb", min=1, help="Mark top-level directories larger than this threshold"),
     depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to scan from each root"),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write scan result to a JSON file"),
+    as_json: bool = typer.Option(False, "--json", help="Print only JSON to stdout (for scripts/pipes)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full table columns (remote, clean, large dirs, reasons)"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
 ) -> None:
     """Scan local folders and classify archive packaging strategy."""
     options = default_scan_options(exclude, large_dir_threshold_mb, depth)
-    
-    if no_progress:
+    # Pure JSON mode should stay quiet aside from the payload itself.
+    show_progress = not no_progress and not as_json
+
+    if not show_progress:
         reports = scan_local_roots_with_progress(roots, options, None)
     else:
         with Progress(
@@ -162,9 +247,16 @@ def scan(
                 progress.update(task_id, completed=completed, total=total, current=str(root))
 
             reports = scan_local_roots_with_progress(roots, options, on_root_scanned)
-    
-    _render_reports(reports)
-    _write_json(reports, json_output)
+
+    if as_json:
+        # Machine-readable path: plain JSON only (no Rich styling / tables).
+        print(_reports_to_json_text(reports))
+    else:
+        _render_reports(reports, verbose=verbose)
+        _render_scan_summary(reports)
+
+    if json_output is not None:
+        _write_json_file(reports, json_output)
 
 
 @app.command("check")
@@ -198,10 +290,7 @@ def check(
 
     _render_safety_reports(reports)
     if json_output is not None:
-        payload = [report.to_dict() for report in reports]
-        text = json.dumps(payload, ensure_ascii=False, indent=2)
-        json_output.write_text(text + "\n", encoding="utf-8")
-        console.print(f"Wrote JSON report to {json_output}")
+        _write_json_file(reports, json_output)
 
 
 @app.command("export")

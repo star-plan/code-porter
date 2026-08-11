@@ -23,22 +23,26 @@ uvx code-porter --help
 ### 扫描本地目录
 
 ```bash
+# 默认：紧凑表格 + 汇总（适合人读）
+uvx code-porter scan ~/code ~/lab
+
+# 需要落盘时再写 JSON 文件
 uvx code-porter scan ~/code ~/lab --json-output reports/local-scan.json
+
+# 脚本/管道：只输出 JSON
+uvx code-porter scan ~/code ~/lab --json
+
+# 查看完整列（remote / clean / 大目录 / 完整原因）
+uvx code-porter scan ~/code ~/lab --verbose
 ```
 
-输出内容包括：
+默认终端输出包括：
 
-- 项目名称与路径
-- 项目类型（Python / Node / Go / Rust / .NET）
-- 是否 Git 仓库
-- 是否存在 Git remote
-- 首个 Git remote 名称与 URL
-- work tree 是否干净
-- 目录大小
-- 是否值得导出与原因
-- 大目录命中情况
-- 默认忽略目录命中情况
-- 推荐打包策略与原因
+- 项目名称、类型、Git 状态（是否仓库 / remote / clean）
+- 目录大小、推荐打包策略、是否值得导出
+- 简短 Note，以及一行汇总（各策略数量、值得导出数量）
+
+使用 `--verbose` 可额外看到 remote、clean、大目录、忽略目录与完整原因；使用 `--json` / `--json-output` 获取完整机器可读结果（含路径、remote URL 等）。
 
 ### 导出 bundle/zip 归档
 
@@ -70,6 +74,7 @@ uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
 
 - 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.git
 - scan 与 export 支持 `--large-dir-threshold-mb` 调整大目录阈值
+- scan 默认只输出紧凑表格与汇总；`--json` 纯 JSON，`--json-output` 写文件，`-v/--verbose` 显示完整列
 - scan、export、import 会在终端显示进度条，减少长任务等待焦虑
 - 导出 zip 时会读取项目根目录的 .gitignore，并叠加默认排除目录
 - bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动

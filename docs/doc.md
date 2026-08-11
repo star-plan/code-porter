@@ -151,10 +151,20 @@ git clone project.bundle
 
 ## scan
 
-本地扫描项目并输出 JSON：
+本地扫描项目。默认输出紧凑表格 + 汇总；需要机器可读结果时再开 JSON：
 
 ```bash
+# 人读（默认）
+uv run code-porter scan C:/code/1
+
+# 写 JSON 文件
 uv run code-porter scan C:/code/1 --json-output reports/scan.json
+
+# 纯 JSON 到 stdout
+uv run code-porter scan C:/code/1 --json
+
+# 完整表格列
+uv run code-porter scan C:/code/1 --verbose
 ```
 
 ## export
