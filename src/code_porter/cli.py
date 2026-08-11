@@ -9,11 +9,68 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 from rich.table import Table
 
 from .archive import export_projects, import_packages, load_manifest
-from .models import ProjectReport, ProjectType, SafetyReport
+from .models import PackagingStrategy, ProjectReport, ProjectType, SafetyReport
 from .scanner import check_local_roots_with_progress, default_scan_options, scan_local_roots_with_progress
 
 app = typer.Typer(help="Local code archive importer/exporter")
 console = Console()
+
+# Named filters for `scan --status`. Multiple values are combined with OR.
+SCAN_STATUS_CHOICES = (
+    "dirty",
+    "clean",
+    "git",
+    "not-git",
+    "remote",
+    "no-remote",
+    "exportable",
+    "skip",
+    "bundle",
+    "overlay",
+    "zip",
+)
+
+
+def _matches_scan_status(report: ProjectReport, status: str) -> bool:
+    """Return True if a project report matches one named scan status filter."""
+    match status:
+        case "dirty":
+            return report.is_git_repo and report.is_clean is False
+        case "clean":
+            return report.is_git_repo and report.is_clean is True
+        case "git":
+            return report.is_git_repo
+        case "not-git":
+            return not report.is_git_repo
+        case "remote":
+            return report.is_git_repo and report.has_remote
+        case "no-remote":
+            return report.is_git_repo and not report.has_remote
+        case "exportable":
+            return report.worth_exporting
+        case "skip":
+            return (not report.worth_exporting) or report.packaging_strategy == PackagingStrategy.SKIP
+        case "bundle":
+            return report.packaging_strategy == PackagingStrategy.BUNDLE
+        case "overlay":
+            return report.packaging_strategy == PackagingStrategy.BUNDLE_WITH_OVERLAY
+        case "zip":
+            return report.packaging_strategy == PackagingStrategy.ZIP
+        case _:
+            return False
+
+
+def _filter_reports_by_status(
+    reports: list[ProjectReport],
+    statuses: list[str],
+) -> list[ProjectReport]:
+    """Filter reports by one or more status names (OR semantics)."""
+    if not statuses:
+        return reports
+    wanted = {item.strip().lower() for item in statuses if item and item.strip()}
+    if not wanted:
+        return reports
+    return [report for report in reports if any(_matches_scan_status(report, status) for status in wanted)]
 
 
 def _report_row_style(report: ProjectReport) -> str:
@@ -108,7 +165,12 @@ def _render_reports(reports: list[ProjectReport], *, verbose: bool = False) -> N
     console.print(table)
 
 
-def _render_scan_summary(reports: list[ProjectReport]) -> None:
+def _render_scan_summary(
+    reports: list[ProjectReport],
+    *,
+    scanned_total: int | None = None,
+    status_filters: list[str] | None = None,
+) -> None:
     """Print a one-line summary of scan results for quick overview."""
     total = len(reports)
     strategy_counts: dict[str, int] = {}
@@ -118,8 +180,15 @@ def _render_scan_summary(reports: list[ProjectReport]) -> None:
     worth = sum(1 for report in reports if report.worth_exporting)
     skip = total - worth
     strategy_part = ", ".join(f"{name}={count}" for name, count in sorted(strategy_counts.items())) or "none"
+
+    if scanned_total is not None and status_filters and scanned_total != total:
+        filter_label = ", ".join(status_filters)
+        head = f"Found {scanned_total} project(s), showing {total} (status={filter_label})"
+    else:
+        head = f"Found {total} project(s)"
+
     console.print(
-        f"Found {total} project(s): {strategy_part}; "
+        f"{head}: {strategy_part}; "
         f"[green]{worth} worth exporting[/green]"
         + (f", [yellow]{skip} skip/review[/yellow]" if skip else ""),
         highlight=False,
@@ -220,12 +289,31 @@ def scan(
     exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to exclude"),
     large_dir_threshold_mb: int = typer.Option(500, "--large-dir-threshold-mb", min=1, help="Mark top-level directories larger than this threshold"),
     depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to scan from each root"),
+    status: list[str] = typer.Option(
+        [],
+        "--status",
+        "-s",
+        help=(
+            "Only show projects matching this status "
+            f"(repeatable, OR). Choices: {', '.join(SCAN_STATUS_CHOICES)}"
+        ),
+        case_sensitive=False,
+    ),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write scan result to a JSON file"),
     as_json: bool = typer.Option(False, "--json", help="Print only JSON to stdout (for scripts/pipes)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full table columns (remote, clean, large dirs, reasons)"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
 ) -> None:
     """Scan local folders and classify archive packaging strategy."""
+    normalized_status = [item.strip().lower() for item in status if item and item.strip()]
+    unknown = sorted({item for item in normalized_status if item not in SCAN_STATUS_CHOICES})
+    if unknown:
+        allowed = ", ".join(SCAN_STATUS_CHOICES)
+        console.print(
+            f"[red]Unknown status filter(s): {', '.join(unknown)}. Allowed: {allowed}[/red]"
+        )
+        raise typer.Exit(code=2)
+
     options = default_scan_options(exclude, large_dir_threshold_mb, depth)
     # Pure JSON mode should stay quiet aside from the payload itself.
     show_progress = not no_progress and not as_json
@@ -248,12 +336,19 @@ def scan(
 
             reports = scan_local_roots_with_progress(roots, options, on_root_scanned)
 
+    scanned_total = len(reports)
+    reports = _filter_reports_by_status(reports, normalized_status)
+
     if as_json:
         # Machine-readable path: plain JSON only (no Rich styling / tables).
         print(_reports_to_json_text(reports))
     else:
         _render_reports(reports, verbose=verbose)
-        _render_scan_summary(reports)
+        _render_scan_summary(
+            reports,
+            scanned_total=scanned_total,
+            status_filters=normalized_status,
+        )
 
     if json_output is not None:
         _write_json_file(reports, json_output)

@@ -165,7 +165,13 @@ uv run code-porter scan C:/code/1 --json
 
 # 完整表格列
 uv run code-porter scan C:/code/1 --verbose
+
+# 只看 dirty / 无 remote 等状态（可重复，OR）
+uv run code-porter scan C:/code/1 --status dirty
+uv run code-porter scan C:/code/1 -s dirty -s no-remote
 ```
+
+`--status` 可选：`dirty`、`clean`、`git`、`not-git`、`remote`、`no-remote`、`exportable`、`skip`、`bundle`、`overlay`、`zip`。
 
 ## export
 

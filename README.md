@@ -34,6 +34,10 @@ uvx code-porter scan ~/code ~/lab --json
 
 # 查看完整列（remote / clean / 大目录 / 完整原因）
 uvx code-porter scan ~/code ~/lab --verbose
+
+# 只看脏工作区项目（可重复 --status / -s，OR 关系）
+uvx code-porter scan ~/code --status dirty
+uvx code-porter scan ~/code -s dirty -s no-remote
 ```
 
 默认终端输出包括：
@@ -43,6 +47,8 @@ uvx code-porter scan ~/code ~/lab --verbose
 - 简短 Note，以及一行汇总（各策略数量、值得导出数量）
 
 使用 `--verbose` 可额外看到 remote、clean、大目录、忽略目录与完整原因；使用 `--json` / `--json-output` 获取完整机器可读结果（含路径、remote URL 等）。
+
+`--status` / `-s` 可选值：`dirty`、`clean`、`git`、`not-git`、`remote`、`no-remote`、`exportable`、`skip`、`bundle`、`overlay`、`zip`。
 
 ### 导出 bundle/zip 归档
 
@@ -74,7 +80,7 @@ uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
 
 - 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.git
 - scan 与 export 支持 `--large-dir-threshold-mb` 调整大目录阈值
-- scan 默认只输出紧凑表格与汇总；`--json` 纯 JSON，`--json-output` 写文件，`-v/--verbose` 显示完整列
+- scan 默认只输出紧凑表格与汇总；`--json` 纯 JSON，`--json-output` 写文件，`-v/--verbose` 显示完整列，`-s/--status` 按状态筛选
 - scan、export、import 会在终端显示进度条，减少长任务等待焦虑
 - 导出 zip 时会读取项目根目录的 .gitignore，并叠加默认排除目录
 - bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动

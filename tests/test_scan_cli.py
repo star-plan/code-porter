@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,12 +26,50 @@ def plain_wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def make_sample_project(root: Path) -> Path:
+def init_git_repo(path: Path) -> None:
+    """Initialize a local git repository with a test identity."""
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test User"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def make_sample_project(root: Path, name: str = "demo-app") -> Path:
     """Create a small non-git Python project for CLI scan tests."""
-    project_dir = root / "demo-app"
+    project_dir = root / name
     project_dir.mkdir()
-    (project_dir / "pyproject.toml").write_text("[project]\nname='demo-app'\n", encoding="utf-8")
+    (project_dir / "pyproject.toml").write_text(f"[project]\nname='{name}'\n", encoding="utf-8")
     (project_dir / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    return project_dir
+
+
+def make_git_project(root: Path, name: str, *, dirty: bool) -> Path:
+    """Create a git Python project that is either clean or dirty."""
+    project_dir = make_sample_project(root, name)
+    init_git_repo(project_dir)
+    subprocess.run(
+        ["git", "-C", str(project_dir), "add", "pyproject.toml", "main.py"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(project_dir), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if dirty:
+        (project_dir / "main.py").write_text("print('dirty')\n", encoding="utf-8")
     return project_dir
 
 
@@ -99,3 +138,64 @@ def test_scan_verbose_includes_extra_columns(tmp_path: Path) -> None:
     assert "Large Dirs" in result.output
     assert "Ignored" in result.output
     assert "Remote" in result.output
+
+
+def test_scan_status_dirty_filters_projects(tmp_path: Path) -> None:
+    """--status dirty should keep only unclean git worktrees."""
+    make_git_project(tmp_path, "clean-app", dirty=False)
+    make_git_project(tmp_path, "dirty-app", dirty=True)
+    make_sample_project(tmp_path, "plain-app")
+
+    result = runner.invoke(app, ["scan", str(tmp_path), "--status", "dirty", "--no-progress"])
+
+    assert result.exit_code == 0, result.output
+    assert "dirty-app" in result.output
+    assert "clean-app" not in result.output
+    assert "plain-app" not in result.output
+    assert "status=dirty" in result.output
+    assert "showing 1" in result.output
+    assert "Found 3 project(s)" in result.output
+
+
+def test_scan_status_not_git_and_json(tmp_path: Path) -> None:
+    """--status not-git with --json should only return non-git projects."""
+    make_git_project(tmp_path, "git-app", dirty=False)
+    make_sample_project(tmp_path, "plain-app")
+
+    result = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--status", "not-git", "--json", "--no-progress"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload) == 1
+    assert payload[0]["name"] == "plain-app"
+
+
+def test_scan_status_or_combines_filters(tmp_path: Path) -> None:
+    """Multiple --status values should be combined with OR."""
+    make_git_project(tmp_path, "dirty-app", dirty=True)
+    make_sample_project(tmp_path, "plain-app")
+    make_git_project(tmp_path, "clean-app", dirty=False)
+
+    result = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--status", "dirty", "--status", "not-git", "--no-progress"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "dirty-app" in result.output
+    assert "plain-app" in result.output
+    assert "clean-app" not in result.output
+
+
+def test_scan_status_unknown_exits_with_error(tmp_path: Path) -> None:
+    """Unknown --status values should fail fast with a clear error."""
+    make_sample_project(tmp_path)
+
+    result = runner.invoke(app, ["scan", str(tmp_path), "--status", "weird", "--no-progress"])
+
+    assert result.exit_code == 2
+    assert "Unknown status filter" in result.output
+    assert "dirty" in result.output
