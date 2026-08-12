@@ -11,7 +11,33 @@
 
 ## 快速开始
 
-无需安装任何 Python 环境或依赖，一行命令即可运行：
+### 普通用户：下载预编译二进制
+
+不需要安装 Python 或 uv。打开 [GitHub Releases](https://github.com/star-plan/code-porter/releases)，按系统下载对应文件：
+
+| 平台 | 文件 |
+|------|------|
+| Windows (x64) | `code-porter-windows-amd64.exe` |
+| Linux (x64) | `code-porter-linux-amd64` |
+| macOS (Intel) | `code-porter-macos-amd64` |
+| macOS (Apple Silicon) | `code-porter-macos-arm64` |
+
+```bash
+# Linux / macOS
+chmod +x code-porter-linux-amd64   # 或对应的 macOS 文件名
+./code-porter-linux-amd64 --help
+
+# Windows（PowerShell / cmd）
+.\code-porter-windows-amd64.exe --help
+```
+
+**前置条件：** 本机需已安装 [Git](https://git-scm.com/) 并加入 `PATH`（导出 / 导入 bundle 会调用系统 `git`）。
+
+可用 Release 中的 `SHA256SUMS` 校验下载文件。Windows SmartScreen 或 macOS Gatekeeper 可能拦截未签名程序：Windows 选「更多信息 → 仍要运行」；macOS 可右键 → 打开。
+
+### 开发者：uvx 一行运行
+
+无需手动装依赖，一行命令即可运行：
 
 ```bash
 # 查看帮助
@@ -127,6 +153,21 @@ uv run code-porter --help
 ## 发布
 
 ```bash
+# 本地构建并上传到 PyPI
 uv build
 uv publish
+```
+
+打 `v*.*.*` 标签推送后，GitHub Actions 会：
+
+1. 运行测试并发布 wheel/sdist 到 PyPI  
+2. 在 Windows / Linux / macOS 上用 PyInstaller 构建 standalone 二进制  
+3. 创建 GitHub Release，附带各平台二进制与 `SHA256SUMS`
+
+本地预览二进制（需 dev 依赖）：
+
+```bash
+uv sync --group dev
+uv run pyinstaller --noconfirm --clean packaging/code-porter.spec
+# 产物：dist/code-porter 或 dist/code-porter.exe
 ```
