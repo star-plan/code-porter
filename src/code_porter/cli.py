@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import typer
@@ -9,6 +10,18 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 from rich.table import Table
 
 from .archive import export_projects, import_packages, load_manifest
+from .cleaner import (
+    CLEAN_PROFILES,
+    PROFILE_CHOICES,
+    PROFILE_ORDER,
+    CleanPlan,
+    CleanTarget,
+    apply_clean_targets,
+    discover_clean_targets,
+    format_size,
+    normalize_profiles,
+    summarize_targets,
+)
 from .models import PackagingStrategy, ProjectReport, ProjectType, SafetyReport
 from .scanner import check_local_roots_with_progress, default_scan_options, scan_local_roots_with_progress
 
@@ -283,6 +296,167 @@ def _render_status_totals(label: str, statuses: list[str]) -> None:
     console.print(f"{label}: {summary}")
 
 
+def _is_interactive() -> bool:
+    """Return True when stdin/stdout are TTYs suitable for prompts."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _render_clean_targets(targets: list[CleanTarget], *, title: str = "Clean Candidates") -> None:
+    """Render discovered junk directories as a compact table."""
+    table = Table(title=title)
+    table.add_column("Project")
+    table.add_column("Profile")
+    table.add_column("Name")
+    table.add_column("Size", justify="right")
+    table.add_column("Path")
+    for item in targets:
+        style = {"deps": "cyan", "cache": "blue", "build": "magenta"}.get(item.profile, "")
+        profile = f"[{style}]{item.profile}[/{style}]" if style else item.profile
+        table.add_row(item.project_name, profile, item.name, item.size_human, item.path)
+    console.print(table)
+
+
+def _render_clean_profile_summary(targets: list[CleanTarget]) -> None:
+    """Print per-profile reclaimable size summary."""
+    summary = summarize_targets(targets)
+    by_profile = summary["by_profile"]
+    assert isinstance(by_profile, dict)
+    parts: list[str] = []
+    for profile in PROFILE_ORDER:
+        data = by_profile.get(profile)
+        if not isinstance(data, dict) or not data.get("count"):
+            continue
+        parts.append(f"{profile}={data['count']} ({data['size_human']})")
+    detail = ", ".join(parts) if parts else "nothing to clean"
+    console.print(
+        f"Found {summary['target_count']} cleanable dir(s), "
+        f"reclaimable [green]{summary['total_human']}[/green]: {detail}",
+        highlight=False,
+    )
+
+
+def _render_clean_result(targets: list[CleanTarget]) -> None:
+    """Render post-apply deletion results."""
+    table = Table(title="Clean Result")
+    table.add_column("Project")
+    table.add_column("Profile")
+    table.add_column("Name")
+    table.add_column("Status")
+    table.add_column("Size", justify="right")
+    table.add_column("Detail")
+    status_style = {
+        "deleted": "green",
+        "failed": "red",
+        "skipped": "yellow",
+        "pending": "dim",
+    }
+    for item in targets:
+        style = status_style.get(item.status, "")
+        status = f"[{style}]{item.status}[/{style}]" if style else item.status
+        table.add_row(
+            item.project_name,
+            item.profile,
+            item.name,
+            status,
+            item.size_human,
+            item.detail or "-",
+        )
+    console.print(table)
+
+    deleted = [item for item in targets if item.status == "deleted"]
+    failed = [item for item in targets if item.status == "failed"]
+    skipped = [item for item in targets if item.status == "skipped"]
+    freed = sum(item.size_bytes for item in deleted)
+    console.print(
+        f"Clean summary: deleted={len(deleted)}, failed={len(failed)}, skipped={len(skipped)}; "
+        f"freed [green]{format_size(freed)}[/green]",
+        highlight=False,
+    )
+
+
+def _prompt_clean_profiles(plan: CleanPlan) -> list[str] | None:
+    """Interactively let the user pick clean profiles (checkbox).
+
+    Returns selected profile names, or None if the user cancelled.
+    """
+    import questionary
+    from questionary import Choice, Style
+
+    summary = summarize_targets(plan.targets)
+    by_profile = summary["by_profile"]
+    assert isinstance(by_profile, dict)
+
+    choices: list[Choice] = []
+    for profile in PROFILE_ORDER:
+        data = by_profile.get(profile) if isinstance(by_profile.get(profile), dict) else None
+        count = int(data["count"]) if data else 0
+        size_human = str(data["size_human"]) if data else "0B"
+        names = ", ".join(sorted(CLEAN_PROFILES[profile]))
+        label = f"{profile:5}  {count:3} dir(s)  {size_human:>8}  [{names}]"
+        # Recommend deps by default; still show empty profiles as disabled-looking info.
+        choices.append(
+            Choice(
+                title=label,
+                value=profile,
+                checked=(profile == "deps" and count > 0),
+                disabled="no matches" if count == 0 else None,
+            )
+        )
+
+    style = Style(
+        [
+            ("qmark", "fg:cyan bold"),
+            ("question", "bold"),
+            ("answer", "fg:cyan"),
+            ("pointer", "fg:cyan bold"),
+            ("highlighted", "fg:cyan bold"),
+            ("selected", "fg:green"),
+        ]
+    )
+    selected = questionary.checkbox(
+        "Select profiles to clean (space to toggle, enter to confirm):",
+        choices=choices,
+        style=style,
+        instruction="deps is recommended; cache/build are optional",
+    ).ask()
+    if selected is None:
+        return None
+    return list(selected)
+
+
+def _prompt_confirm_clean(targets: list[CleanTarget]) -> bool | None:
+    """Ask the user to confirm destructive deletion.
+
+    Returns True/False for yes/no, or None if the prompt was cancelled.
+    """
+    import questionary
+
+    total = format_size(sum(item.size_bytes for item in targets))
+    result = questionary.confirm(
+        f"Permanently delete {len(targets)} directory(ies) (~{total})?",
+        default=False,
+    ).ask()
+    if result is None:
+        return None
+    return bool(result)
+
+
+def _prompt_apply_now() -> bool | None:
+    """Ask whether to apply the selected dry-run plan now.
+
+    Returns True/False for yes/no, or None if the prompt was cancelled.
+    """
+    import questionary
+
+    result = questionary.confirm(
+        "Apply deletion for the selected profiles now?",
+        default=False,
+    ).ask()
+    if result is None:
+        return None
+    return bool(result)
+
+
 @app.command("scan")
 def scan(
     roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
@@ -470,6 +644,215 @@ def export(
     console.print(f"Wrote {len(manifest.packages)} package(s) to {output_dir}")
     if manifest_output is not None:
         _write_manifest_json(manifest.to_dict(), manifest_output)
+
+
+@app.command("clean")
+def clean(
+    roots: list[Path] = typer.Argument(..., exists=True, readable=True, resolve_path=True),
+    profile: list[str] = typer.Option(
+        [],
+        "--profile",
+        "-p",
+        help=(
+            "Clean profile to include (repeatable). "
+            f"Choices: {', '.join(PROFILE_CHOICES)}. "
+            "If omitted in an interactive terminal, a checkbox UI is shown."
+        ),
+        case_sensitive=False,
+    ),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply",
+        help="Actually delete directories (default is dry-run preview only)",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompts when used with --apply",
+    ),
+    depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to discover projects from each root"),
+    exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to skip while discovering projects"),
+    json_output: Path | None = typer.Option(None, "--json-output", help="Write clean plan/result to a JSON file"),
+    as_json: bool = typer.Option(False, "--json", help="Print only JSON to stdout (implies non-interactive)"),
+    no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
+    no_interactive: bool = typer.Option(
+        False,
+        "--no-interactive",
+        help="Disable prompts; require --profile for filtering and --yes with --apply",
+    ),
+) -> None:
+    """Preview or delete regenerable junk dirs (node_modules, .venv, caches, builds).
+
+    Default mode is dry-run: lists deps/cache/build candidates with sizes.
+    Use --apply to delete. Interactive terminals can checkbox-select profiles.
+    """
+    interactive = _is_interactive() and not no_interactive and not as_json
+
+    raw_profiles = [item.strip().lower() for item in profile if item and item.strip()]
+    unknown = sorted({item for item in raw_profiles if item not in PROFILE_CHOICES})
+    if unknown:
+        allowed = ", ".join(PROFILE_CHOICES)
+        console.print(f"[red]Unknown profile(s): {', '.join(unknown)}. Allowed: {allowed}[/red]")
+        raise typer.Exit(code=2)
+
+    options = default_scan_options(exclude, depth=depth)
+    show_progress = not no_progress and not as_json
+
+    if not show_progress:
+        plan = discover_clean_targets(roots, options, on_project_scanned=None)
+    else:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TextColumn("{task.fields[current]}", justify="left"),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Scanning projects", total=None, current="")
+
+            def on_project_scanned(project_path: Path, completed: int, total: int) -> None:
+                progress.update(
+                    task_id,
+                    total=total,
+                    completed=completed,
+                    current=str(project_path),
+                )
+
+            plan = discover_clean_targets(roots, options, on_project_scanned=on_project_scanned)
+
+    if not plan.targets:
+        if as_json:
+            print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            console.print("No cleanable directories found under the given roots.")
+        if json_output is not None:
+            json_output.parent.mkdir(parents=True, exist_ok=True)
+            json_output.write_text(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            console.print(f"Wrote JSON report to {json_output}")
+        return
+
+    # Always preview the full inventory first (all profiles), unless pure JSON mode.
+    if not as_json:
+        _render_clean_targets(plan.targets, title="Clean Candidates (all profiles)")
+        _render_clean_profile_summary(plan.targets)
+        console.print(
+            "[dim]Profiles: deps=reinstallable packages, cache=tool caches, "
+            "build=build outputs (higher risk)[/dim]"
+        )
+
+    selected_profiles: list[str]
+    if raw_profiles:
+        selected_profiles = sorted(normalize_profiles(raw_profiles))
+    elif interactive:
+        picked = _prompt_clean_profiles(plan)
+        if picked is None:
+            console.print("Cancelled.")
+            raise typer.Exit(code=1)
+        if not picked:
+            console.print("No profiles selected.")
+            raise typer.Exit(code=0)
+        selected_profiles = picked
+    else:
+        # Non-interactive dry-run without --profile: show everything, do not delete.
+        selected_profiles = list(PROFILE_ORDER)
+        if apply_changes:
+            console.print(
+                "[red]Refusing --apply without --profile in non-interactive mode. "
+                "Pass -p deps (and/or cache, build, all) explicitly.[/red]"
+            )
+            raise typer.Exit(code=2)
+
+    selected_plan = plan.filter_profiles(selected_profiles)
+    if not selected_plan.targets:
+        if as_json:
+            print(json.dumps(selected_plan.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            console.print(
+                f"No targets matched selected profile(s): {', '.join(selected_profiles)}"
+            )
+        return
+
+    if not as_json and (raw_profiles or interactive):
+        _render_clean_targets(
+            selected_plan.targets,
+            title=f"Selected ({', '.join(selected_profiles)})",
+        )
+        _render_clean_profile_summary(selected_plan.targets)
+
+    should_apply = apply_changes
+    if not should_apply and interactive and not as_json:
+        # Dry-run default, but offer to apply after profile selection.
+        answer = _prompt_apply_now()
+        if answer is None:
+            console.print("Cancelled.")
+            raise typer.Exit(code=1)
+        should_apply = answer
+
+    if not should_apply:
+        if as_json:
+            print(json.dumps(selected_plan.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            console.print(
+                "[yellow]Dry-run only[/yellow] — no files deleted. "
+                "Re-run with [bold]--apply[/bold] (and optionally [bold]-p/--profile[/bold]) to delete."
+            )
+        if json_output is not None:
+            json_output.parent.mkdir(parents=True, exist_ok=True)
+            json_output.write_text(
+                json.dumps(selected_plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            console.print(f"Wrote JSON report to {json_output}")
+        return
+
+    if not yes:
+        if interactive:
+            confirmed = _prompt_confirm_clean(selected_plan.targets)
+            if confirmed is None or not confirmed:
+                console.print("Cancelled.")
+                raise typer.Exit(code=1)
+        else:
+            console.print(
+                "[red]Refusing --apply without --yes in non-interactive mode.[/red]"
+            )
+            raise typer.Exit(code=2)
+
+    if show_progress:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TextColumn("{task.fields[current]}", justify="left"),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Deleting", total=len(selected_plan.targets), current="")
+
+            def on_target_processed(target: CleanTarget, completed: int, total: int) -> None:
+                progress.update(task_id, completed=completed, total=total, current=target.path)
+
+            apply_clean_targets(selected_plan.targets, on_target_processed=on_target_processed)
+    else:
+        apply_clean_targets(selected_plan.targets, on_target_processed=None)
+
+    if as_json:
+        print(json.dumps(selected_plan.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        _render_clean_result(selected_plan.targets)
+
+    if json_output is not None:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(
+            json.dumps(selected_plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if not as_json:
+            console.print(f"Wrote JSON report to {json_output}")
+
+    if any(item.status == "failed" for item in selected_plan.targets):
+        raise typer.Exit(code=1)
 
 
 @app.command("import")
