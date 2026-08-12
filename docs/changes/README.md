@@ -27,7 +27,7 @@ description: |
 
 | 文档 | 完成日期 | 定位 |
 |------|----------|------|
-| （暂无） | — | 完成后从 `active/` 移入 `completed/` |
+| [scan-clean-result-sort.md](./completed/scan-clean-result-sort.md) | 2026-08-12 | scan/clean 结果 `--sort` / `--reverse` |
 
 ## 已归档 plans
 

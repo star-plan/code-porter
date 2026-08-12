@@ -84,6 +84,10 @@ uvx code-porter scan ~/code ~/lab --verbose
 # 只看脏工作区项目（可重复 --status / -s，OR 关系）
 uvx code-porter scan ~/code --status dirty
 uvx code-porter scan ~/code -s dirty -s no-remote
+
+# 按体积从大到小排序（可再加 --reverse / -r 反转）
+uvx code-porter scan ~/code --sort size
+uvx code-porter scan ~/code -S name -r
 ```
 
 默认终端输出包括：
@@ -95,6 +99,8 @@ uvx code-porter scan ~/code -s dirty -s no-remote
 使用 `--verbose` 可额外看到 remote、clean、大目录、忽略目录与完整原因；使用 `--json` / `--json-output` 获取完整机器可读结果（含路径、remote URL 等）。
 
 `--status` / `-s` 可选值：`dirty`、`clean`、`git`、`not-git`、`remote`、`no-remote`、`exportable`、`skip`、`bundle`、`overlay`、`zip`。
+
+`--sort` / `-S` 可选值：`path`、`name`、`size`（默认大→小）、`type`、`package`、`export`（值得导出优先）。加 `--reverse` / `-r` 可反转该字段的自然方向。筛选（`--status`）先于排序。
 
 ### 导出 bundle/zip 归档
 
@@ -114,6 +120,10 @@ uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
 # 默认 dry-run：列出 deps / cache / build 候选及体积
 uvx code-porter clean ~/code
 
+# 按可回收体积从大到小排序
+uvx code-porter clean ~/code --sort size
+uvx code-porter clean ~/code -S project
+
 # 交互终端会弹出 checkbox 勾选 profile，并询问是否立刻删除
 # 非交互 / 脚本用法：
 uvx code-porter clean ~/code -p deps --apply --yes
@@ -131,6 +141,8 @@ Profile 说明：
 匹配按**目录名（basename）**，因此 `.tmp/uv-cache`、`.tmp/gocache` 这类嵌套缓存也会被识别；不会整目录删除可能混有业务文件的 `.tmp`。
 
 默认只预览不删除；必须显式 `--apply` 才会动手。非交互模式下 `--apply` 还需要 `-p/--profile` 与 `-y/--yes`。
+
+默认列表顺序为 profile（`deps` → `cache` → `build`），同 profile 内按体积从大到小。可用 `--sort` / `-S` 改为 `size`、`project`、`name`、`path` 等；`--reverse` / `-r` 反转自然方向。
 
 ## 命令
 

@@ -204,6 +204,15 @@ exports/windows-backup/
 
 `dirty` · `clean` · `git` · `not-git` · `remote` · `no-remote` · `exportable` · `skip` · `bundle` · `overlay` · `zip`
 
+### 5.4 `scan` / `clean` 结果排序
+
+- 选项：`--sort` / `-S KEY`，`--reverse` / `-r`
+- 流水线：`filter → sort → 表格 / JSON`（人读与机器读顺序一致）
+- `scan` KEY：`path` · `name` · `size`（默认大→小）· `type` · `package` · `export`（值得导出优先）
+- `clean` KEY：`profile`（deps→cache→build，同组内体积降序）· `size` · `project` · `name` · `path`
+- 未指定 `--sort` 时：`scan` 保持 path 序；`clean` 默认 `PROFILE_ORDER` + 体积降序
+- 调研背景：[research/scan-clean-result-sort.md](./research/scan-clean-result-sort.md)
+
 ## 六、Clean 设计要点
 
 | Profile | 典型目录 | 风险 |
