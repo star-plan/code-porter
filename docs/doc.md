@@ -173,6 +173,23 @@ uv run code-porter scan C:/code/1 -s dirty -s no-remote
 
 `--status` 可选：`dirty`、`clean`、`git`、`not-git`、`remote`、`no-remote`、`exportable`、`skip`、`bundle`、`overlay`、`zip`。
 
+## clean
+
+预览或删除可重建垃圾目录（默认 dry-run）：
+
+```bash
+# 列出 deps/cache/build 候选
+uv run code-porter clean C:/code/1
+
+# 脚本：只删依赖目录
+uv run code-porter clean C:/code/1 -p deps --apply --yes
+
+# 交互终端：checkbox 勾选 profile，并可确认后删除
+uv run code-porter clean C:/code/1
+```
+
+Profile：`deps` / `cache` / `build` / `all`。永不删除 `.git`。
+
 ## export
 
 本地扫描并导出备份包：

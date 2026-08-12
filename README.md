@@ -62,11 +62,34 @@ uvx code-porter export ~/code ~/lab ./exports/local-backup
 uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
 ```
 
+### 清理可重建垃圾目录
+
+```bash
+# 默认 dry-run：列出 deps / cache / build 候选及体积
+uvx code-porter clean ~/code
+
+# 交互终端会弹出 checkbox 勾选 profile，并询问是否立刻删除
+# 非交互 / 脚本用法：
+uvx code-porter clean ~/code -p deps --apply --yes
+uvx code-porter clean ~/code -p deps -p cache --apply --yes
+uvx code-porter clean ~/code -p all --apply --yes
+```
+
+Profile 说明：
+
+- `deps`：`node_modules`、`.venv`、`venv`、`.uv-cache` 等可重装依赖（推荐）
+- `cache`：`.next`、`.cache`、`__pycache__`、各类工具缓存
+- `build`：`dist`、`build`、`target` 等构建产物（风险更高，需有意选择）
+- `all`：以上全部（仍永远不会删除 `.git`）
+
+默认只预览不删除；必须显式 `--apply` 才会动手。非交互模式下 `--apply` 还需要 `-p/--profile` 与 `-y/--yes`。
+
 ## 命令
 
 | 命令 | 作用 |
 |------|------|
 | scan | 扫描本地目录，分析项目结构 |
+| clean | 预览/删除可重建垃圾目录（node_modules、.venv 等） |
 | export | 扫描并输出 bundle/zip 归档，以及 manifest.json |
 | import | 根据 manifest.json 将归档导入到目标目录 |
 
@@ -81,6 +104,7 @@ uvx code-porter import ./exports/local-backup/manifest.json ~/code/imported
 - 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.git
 - scan 与 export 支持 `--large-dir-threshold-mb` 调整大目录阈值
 - scan 默认只输出紧凑表格与汇总；`--json` 纯 JSON，`--json-output` 写文件，`-v/--verbose` 显示完整列，`-s/--status` 按状态筛选
+- clean 默认 dry-run；交互终端可用 checkbox 勾选 profile；`--apply` 真删，非交互需 `-p` + `-y`
 - scan、export、import 会在终端显示进度条，减少长任务等待焦虑
 - 导出 zip 时会读取项目根目录的 .gitignore，并叠加默认排除目录
 - bundle 导入后如果存在 overlay zip，会在 clone 后覆盖工作区文件，以保留未提交改动
