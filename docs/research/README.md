@@ -18,6 +18,7 @@ description: |
 | 文档 | 说明 |
 |------|------|
 | [跨平台分发与包管理](./distribution-packaging.md) | 预编译二进制、Scoop / Homebrew、Linux 包管理选型与路线图 |
+| [scan / clean 扫描结果排序](./scan-clean-result-sort.md) | 列表排序 CLI 设计、字段语义、默认行为与 MVP 范围 |
 
 ## 维护约定
 
