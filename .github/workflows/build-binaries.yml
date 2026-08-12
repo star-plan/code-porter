@@ -26,7 +26,7 @@ jobs:
           - os: ubuntu-22.04
             asset_name: code-porter-linux-amd64
             binary_name: code-porter
-          - os: macos-14
+          - os: macos-26
             asset_name: code-porter-macos-arm64
             binary_name: code-porter
     runs-on: ${{ matrix.os }}
