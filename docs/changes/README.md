@@ -21,7 +21,7 @@ description: |
 
 | 文档 | 状态 | 定位 |
 |------|------|------|
-| （暂无） | — | 有新计划时在此表登记，文件放 `active/` |
+| [distribution-followups.md](./active/distribution-followups.md) | planning | 分发渠道后续：deb/rpm、签名、文档与 packaging 仓完善 |
 
 ## 已完成 plans
 

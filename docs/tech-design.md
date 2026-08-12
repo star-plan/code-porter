@@ -7,7 +7,8 @@ tags:
   - tech
   - architecture
 description: |
-  code-porter 的技术选型、模块职责、打包策略、数据模型与 CLI 设计要点。
+  code-porter 的技术选型、模块职责、用户代码打包策略、本工具分发渠道、
+  数据模型与 CLI 设计要点。
 ---
 
 # code-porter 技术架构
@@ -229,8 +230,41 @@ exports/windows-backup/
 
 工具**不绑定**复制方式。导出目录可通过 U 盘、SMB、iCloud Drive、移动硬盘等任意介质到达目标机。
 
-## 九、演进约定
+## 九、本工具如何分发（安装渠道）
 
-- 改变打包语义、manifest 版本或默认排除规则：先更新本文，必要时写 `docs/changes/active/` 计划
+本节指 **code-porter 自身**如何交付给终端用户，与「三、打包策略」（用户代码库 → bundle/zip）无关。
+
+详细对比、备选方案与路线图见调研：[research/distribution-packaging.md](./research/distribution-packaging.md)。
+
+### 9.1 渠道矩阵
+
+| 受众 | 渠道 | 说明 |
+|------|------|------|
+| 开发者 | PyPI / `uvx code-porter` | 现有主路径 |
+| 要免 Python 环境 | GitHub Release 预编译 | PyInstaller one-file；附 `SHA256SUMS` |
+| Windows 包管理 | Scoop [`star-plan/scoop`](https://github.com/star-plan/scoop) | 独立 bucket，不回写本仓 |
+| macOS / Linux 包管理 | Homebrew [`star-plan/tap`](https://github.com/star-plan/homebrew-tap) | Linux 亦可 brew，与 mac 共用 Formula |
+| 前置条件 | 系统 `git` 在 `PATH` | 导出/导入 bundle 调用本机 Git |
+
+### 9.2 发布流水线（摘要）
+
+```text
+tag v*.*.*
+  → 测试 + PyPI
+  → matrix 构建 Win/Linux/macOS 二进制 → GitHub Release
+  →（可选 PACKAGING_TOKEN）notify star-plan/scoop & homebrew-tap
+  → packaging 仓 cron/dispatch 从 Release 同步 manifest / Formula
+```
+
+应用仓**不**在发版后 commit Scoop/Homebrew 的 version/hash，避免 bot 污染 git 历史。
+
+### 9.3 后续（未完成）
+
+Linux deb/rpm、代码签名、Aqua/AUR 等见 [changes/active/distribution-followups.md](./changes/active/distribution-followups.md) 与上述 research 文档。
+
+## 十、演进约定
+
+- 改变用户代码打包语义、manifest 版本或默认排除规则：先更新本文，必要时写 `docs/changes/active/` 计划
+- 改变本工具分发渠道的**默认策略**：更新本节摘要，细节写入 `docs/research/distribution-packaging.md`
 - 仅改文案或小 bugfix：可直接改代码，不必强制 change plan
 - 产品范围变化：同步 [product-design.md](./product-design.md)

@@ -97,7 +97,20 @@ MacBook / 目标机
 5. **安全默认值**：clean 默认 dry-run；import 遇已存在目录默认跳过
 6. **人读优先、机器可读可选**：终端表格默认；JSON 按需打开
 
-## 六、当前非目标
+## 六、获取与安装（产品视角）
+
+工具面向两类安装预期（技术细节见 [tech-design §九](./tech-design.md) 与 [分发调研](./research/distribution-packaging.md)）：
+
+| 用户 | 期望 | 当前主路径 |
+|------|------|------------|
+| 开发者 | 一行命令、跟进版本 | `uvx code-porter` / PyPI |
+| 普通用户 | 不装 Python，用本机包管理器或下载二进制 | Windows：Scoop；macOS/Linux：Homebrew；或 GitHub Release |
+
+**统一前置：** 本机安装 Git 并在 `PATH` 中可用。
+
+后续增强（deb/rpm、签名等）不改变「纯本地 CLI」产品定位，只拓宽到达路径；跟踪见 [changes/active/distribution-followups.md](./changes/active/distribution-followups.md)。
+
+## 七、当前非目标
 
 以下不在当前产品主路径内：
 
@@ -106,9 +119,11 @@ MacBook / 目标机
 3. 图形界面（GUI）
 4. 自动推送到任意 Git 远程并完成双向同步
 5. 对二进制大文件（LFS 等）的专门治理策略（按通用 Git/zip 行为处理）
+6. 自建完整 Linux apt/yum 软件源（优先 Release 资产与 Homebrew；见调研文档）
 
-## 七、与文档其他层的关系
+## 八、与文档其他层的关系
 
 - 能力「做什么、不做什么」以本文为准
 - 实现细节、模块边界、策略算法见 [tech-design.md](./tech-design.md)
+- 分发/包管理选型背景见 [research/](./research/README.md)
 - 局部新功能或机制调整先写 [changes/](./changes/README.md)，再改代码
