@@ -14,6 +14,8 @@ PROTECTED_DIR_NAMES = {".git"}
 
 # Profiles group directory basenames by rebuild risk.
 # dry-run previews all profiles; apply only deletes selected ones.
+# Matching is basename-only: nested caches (e.g. .tmp/uv-cache) are cleaned
+# without deleting a mixed parent like .tmp that may hold real project files.
 CLEAN_PROFILES: dict[str, frozenset[str]] = {
     "deps": frozenset(
         {
@@ -21,7 +23,10 @@ CLEAN_PROFILES: dict[str, frozenset[str]] = {
             ".venv",
             "venv",
             ".uv-cache",
+            "uv-cache",  # project-local UV_CACHE_DIR (often under .tmp/)
             ".pnpm-store",
+            "gomodcache",  # project-local GOMODCACHE
+            ".gomodcache",
         }
     ),
     "cache": frozenset(
@@ -41,6 +46,8 @@ CLEAN_PROFILES: dict[str, frozenset[str]] = {
             ".eggs",
             "htmlcov",
             ".ipynb_checkpoints",
+            "gocache",  # project-local GOCACHE
+            ".gocache",
         }
     ),
     "build": frozenset(

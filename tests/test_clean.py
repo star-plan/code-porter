@@ -60,9 +60,15 @@ def test_profile_for_dirname_maps_known_and_protected() -> None:
     """Directory basenames should map to the right profile; .git is protected."""
     assert profile_for_dirname("node_modules") == "deps"
     assert profile_for_dirname(".venv") == "deps"
+    assert profile_for_dirname(".uv-cache") == "deps"
+    assert profile_for_dirname("uv-cache") == "deps"
+    assert profile_for_dirname("gomodcache") == "deps"
     assert profile_for_dirname(".next") == "cache"
+    assert profile_for_dirname("gocache") == "cache"
     assert profile_for_dirname("dist") == "build"
     assert profile_for_dirname(".git") is None
+    assert profile_for_dirname(".tmp") is None
+    assert profile_for_dirname("sdists-v9") is None
     assert profile_for_dirname("src") is None
 
 
@@ -95,6 +101,60 @@ def test_discover_clean_targets_finds_profiles_and_sizes(tmp_path: Path) -> None
     assert by_name["dist"].profile == "build"
     assert by_name["node_modules"].size_bytes > 0
     assert all(item.name != ".git" for item in plan.targets)
+
+
+def test_discover_nested_project_local_tool_caches(tmp_path: Path) -> None:
+    """Project-local Go/uv caches under a mixed .tmp dir should be clean targets.
+
+    The parent .tmp directory itself must not be selected: it may hold real
+    project files (spreadsheets, scripts) alongside regenerable caches.
+    """
+    project = tmp_path / "xingwei-app"
+    project.mkdir()
+    write_file(project / "go.mod", "module example.com/app\n")
+    write_file(project / ".tmp" / "notes.xlsx", "sheet\n")
+    write_file(project / ".tmp" / "update_quote_workbook.py", "print(1)\n")
+    write_file(project / ".tmp" / "uv-cache" / "sdists-v9" / "pkg" / "a.tar.gz", "sdist\n")
+    write_file(project / ".tmp" / "gocache" / "trim.txt", "go-build\n")
+    write_file(project / ".tmp" / "gomodcache" / "mod" / "go.mod", "module x\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    by_path = {item.path: item for item in plan.targets}
+
+    uv_cache = project / ".tmp" / "uv-cache"
+    gocache = project / ".tmp" / "gocache"
+    gomodcache = project / ".tmp" / "gomodcache"
+    assert str(uv_cache) in by_path
+    assert str(gocache) in by_path
+    assert str(gomodcache) in by_path
+    assert by_path[str(uv_cache)].profile == "deps"
+    assert by_path[str(gomodcache)].profile == "deps"
+    assert by_path[str(gocache)].profile == "cache"
+    assert all(item.name != ".tmp" for item in plan.targets)
+    assert all(item.name != "sdists-v9" for item in plan.targets)
+
+
+def test_apply_nested_tool_caches_keeps_mixed_tmp_files(tmp_path: Path) -> None:
+    """Deleting nested tool caches must leave sibling files under .tmp intact."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "pyproject.toml", "[project]\nname='app'\n")
+    xlsx = project / ".tmp" / "需求.xlsx"
+    script = project / ".tmp" / "update_quote_workbook.py"
+    uv_cache = project / ".tmp" / "uv-cache"
+    write_file(xlsx, "sheet\n")
+    write_file(script, "print(1)\n")
+    write_file(uv_cache / "sdists-v9" / "pkg" / "a.tar.gz", "sdist\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    deps_only = plan.filter_profiles(["deps"]).targets
+    apply_clean_targets(deps_only)
+
+    assert not uv_cache.exists()
+    assert xlsx.exists()
+    assert script.exists()
+    assert (project / ".tmp").is_dir()
+    assert all(item.status == "deleted" for item in deps_only)
 
 
 def test_discover_skips_nested_project_roots(tmp_path: Path) -> None:

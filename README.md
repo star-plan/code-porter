@@ -123,10 +123,12 @@ uvx code-porter clean ~/code -p all --apply --yes
 
 Profile 说明：
 
-- `deps`：`node_modules`、`.venv`、`venv`、`.uv-cache` 等可重装依赖（推荐）
-- `cache`：`.next`、`.cache`、`__pycache__`、各类工具缓存
+- `deps`：`node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache` 等可重装依赖（推荐）
+- `cache`：`.next`、`.cache`、`__pycache__`、`gocache` 等各类工具缓存
 - `build`：`dist`、`build`、`target` 等构建产物（风险更高，需有意选择）
 - `all`：以上全部（仍永远不会删除 `.git`）
+
+匹配按**目录名（basename）**，因此 `.tmp/uv-cache`、`.tmp/gocache` 这类嵌套缓存也会被识别；不会整目录删除可能混有业务文件的 `.tmp`。
 
 默认只预览不删除；必须显式 `--apply` 才会动手。非交互模式下 `--apply` 还需要 `-p/--profile` 与 `-y/--yes`。
 

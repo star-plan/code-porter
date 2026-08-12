@@ -121,6 +121,11 @@ git bundle create project.bundle --all
 node_modules
 .venv
 .uv-cache
+uv-cache
+gomodcache
+.gomodcache
+gocache
+.gocache
 dist
 build
 target
@@ -129,7 +134,7 @@ target
 .git
 ```
 
-（实现以 `scanner.DEFAULT_EXCLUDES` 为准；`clean` 的 profile 集合更细，见 `cleaner.CLEAN_PROFILES`。）
+（实现以 `scanner.DEFAULT_EXCLUDES` 为准；`clean` 的 profile 集合更细，见 `cleaner.CLEAN_PROFILES`。按 basename 匹配，嵌套路径如 `.tmp/uv-cache` 也会生效，但不会整删混合用途的 `.tmp`。）
 
 ## 四、导出目录与 Manifest
 
@@ -203,8 +208,8 @@ exports/windows-backup/
 
 | Profile | 典型目录 | 风险 |
 |---------|----------|------|
-| `deps` | `node_modules`、`.venv`、`venv`、`.uv-cache` | 可重装，推荐 |
-| `cache` | `.next`、`.cache`、`__pycache__` 等 | 可重建 |
+| `deps` | `node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache` | 可重装，推荐 |
+| `cache` | `.next`、`.cache`、`__pycache__`、`gocache` 等 | 可重建 |
 | `build` | `dist`、`build`、`target` 等 | 较高，需有意选择 |
 | `all` | 以上全部 | 仍永不删 `.git` |
 

@@ -13,16 +13,23 @@ MARKERS: dict[str, ProjectType] = {
     "go.mod": ProjectType.GO,
     "Cargo.toml": ProjectType.RUST,
 }
+# Regenerable dirs skipped during walk/size and excluded from zip export.
+# Basename match only — nested names like .tmp/uv-cache are still excluded.
 DEFAULT_EXCLUDES = {
     ".cache",
     ".git",
+    ".gocache",
+    ".gomodcache",
     ".next",
     ".venv",
     ".uv-cache",
     "build",
     "dist",
+    "gocache",
+    "gomodcache",
     "node_modules",
     "target",
+    "uv-cache",
 }
 
 
