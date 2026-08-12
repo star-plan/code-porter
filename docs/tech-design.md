@@ -26,6 +26,8 @@ description: |
 | 版本控制 | 系统 `git` | bundle create / clone / status 等子进程调用 |
 | 包管理 / 发布 | uv + hatchling / hatch-vcs | 开发同步、版本来自 VCS、PyPI 发布 |
 | 预编译二进制 | PyInstaller（`--onefile`） | GHA 多平台构建，挂到 GitHub Release |
+| Windows 包管理 | Scoop bucket [`star-plan/scoop`](https://github.com/star-plan/scoop) | 独立仓自同步，不回写本仓 |
+| macOS/Linux 包管理 | Homebrew tap [`star-plan/homebrew-tap`](https://github.com/star-plan/homebrew-tap) | 独立仓自同步 Formula |
 | 测试 | pytest | `tests/`，`pythonpath = src` |
 
 **刻意不做的选择：**

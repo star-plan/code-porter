@@ -195,6 +195,20 @@ jobs:
 
             **Requirement:** [Git](https://git-scm.com/) must be installed and available on `PATH` (used for bundle export/import).
 
+            ### Package managers
+
+            ```powershell
+            # Scoop (Windows)
+            scoop bucket add star-plan https://github.com/star-plan/scoop
+            scoop install code-porter
+            ```
+
+            ```bash
+            # Homebrew (macOS / Linux)
+            brew tap star-plan/tap
+            brew install code-porter
+            ```
+
             ### Quick start
 
             ```bash
@@ -212,3 +226,26 @@ jobs:
 
             - Unsigned binaries may be blocked by Windows SmartScreen or macOS Gatekeeper; use “More info → Run anyway” / right-click → Open when prompted.
             - Developers can still use `uvx code-porter` or install from PyPI.
+
+  # Scoop / Homebrew packages live in external repos and self-sync from GitHub
+  # Releases. Optional PACKAGING_TOKEN triggers an immediate sync dispatch.
+  notify-packaging:
+    needs: github-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Notify scoop + homebrew-tap (optional)
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "PACKAGING_TOKEN not set; packaging repos will pick up this release on their next sync."
+            exit 0
+          fi
+          payload='{"event_type":"app-release","client_payload":{"app":"code-porter","tag":"'"${GITHUB_REF_NAME}"'"}}'
+          echo "Dispatching app-release to star-plan/scoop"
+          gh api repos/star-plan/scoop/dispatches --input - <<<"$payload"
+          echo "Dispatching app-release to star-plan/homebrew-tap"
+          gh api repos/star-plan/homebrew-tap/dispatches --input - <<<"$payload"

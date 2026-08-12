@@ -11,6 +11,26 @@
 
 ## 快速开始
 
+### 普通用户：包管理器安装（推荐）
+
+**前置条件：** 本机需已安装 [Git](https://git-scm.com/) 并加入 `PATH`（导出 / 导入 bundle 会调用系统 `git`）。
+
+#### Scoop（Windows）
+
+```powershell
+scoop bucket add star-plan https://github.com/star-plan/scoop
+scoop install code-porter
+code-porter --help
+```
+
+#### Homebrew（macOS / Linux）
+
+```bash
+brew tap star-plan/tap
+brew install code-porter
+code-porter --help
+```
+
 ### 普通用户：下载预编译二进制
 
 不需要安装 Python 或 uv。打开 [GitHub Releases](https://github.com/star-plan/code-porter/releases)，按系统下载对应文件：
@@ -30,8 +50,6 @@ chmod +x code-porter-linux-amd64   # 或对应的 macOS 文件名
 # Windows（PowerShell / cmd）
 .\code-porter-windows-amd64.exe --help
 ```
-
-**前置条件：** 本机需已安装 [Git](https://git-scm.com/) 并加入 `PATH`（导出 / 导入 bundle 会调用系统 `git`）。
 
 可用 Release 中的 `SHA256SUMS` 校验下载文件。Windows SmartScreen 或 macOS Gatekeeper 可能拦截未签名程序：Windows 选「更多信息 → 仍要运行」；macOS 可右键 → 打开。
 
@@ -162,8 +180,8 @@ uv publish
 
 1. 运行测试并发布 wheel/sdist 到 PyPI  
 2. 在 Windows / Linux / macOS 上用 PyInstaller 构建 standalone 二进制  
-3. 创建 GitHub Release，附带各平台二进制与 `SHA256SUMS`
-
+3. 创建 GitHub Release，附带各平台二进制与 `SHA256SUMS`  
+4. （可选）若配置了 `PACKAGING_TOKEN`，通知 [star-plan/scoop](https://github.com/star-plan/scoop) 与 [star-plan/homebrew-tap](https://github.com/star-plan/homebrew-tap) 立即同步；否则对方按 cron 自动拉取 Release
 本地预览二进制（需 dev 依赖）：
 
 ```bash
