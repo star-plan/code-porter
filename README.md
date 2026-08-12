@@ -7,6 +7,8 @@
 
 一个纯本地运行的代码库导入导出工具。它会在当前机器上扫描项目，优先将 Git 仓库导出为 git bundle，将非 Git 项目导出为 zip；导出完成后，可在另一台机器上基于 manifest 批量导入。
 
+设计文档见 [docs/](./docs/README.md)（[产品设计](./docs/product-design.md) · [技术架构](./docs/tech-design.md)）。局部变更计划放在 [docs/changes/](./docs/changes/README.md)。
+
 ## 快速开始
 
 无需安装任何 Python 环境或依赖，一行命令即可运行：
