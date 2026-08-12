@@ -27,8 +27,8 @@ def plain_wide_console(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def init_git_repo(path: Path) -> None:
-    """Initialize a local git repository with a test identity."""
-    subprocess.run(["git", "init", str(path)], check=True, capture_output=True, text=True)
+    """Initialize a local git repository on branch main with a test identity."""
+    subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True, text=True)
     subprocess.run(
         ["git", "-C", str(path), "config", "user.name", "Test User"],
         check=True,
