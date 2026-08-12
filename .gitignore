@@ -1,3 +1,36 @@
-.venv
-__pycache__
+# Virtual environments
+.venv/
+venv/
+.env
+.env.*
+
+# Python caches / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# PyInstaller / local build outputs
+build/
+dist/
+*.spec.bak
+*.manifest
+
+# Local scratch / tool output
 output/
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
