@@ -199,3 +199,76 @@ def test_scan_status_unknown_exits_with_error(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert "Unknown status filter" in result.output
     assert "dirty" in result.output
+
+
+def test_scan_sort_size_largest_first(tmp_path: Path) -> None:
+    """--sort size should list largest projects first (natural direction)."""
+    small = make_sample_project(tmp_path, "small-app")
+    large = make_sample_project(tmp_path, "large-app")
+    (large / "big.bin").write_bytes(b"x" * 50_000)
+    (small / "tiny.bin").write_bytes(b"y" * 100)
+
+    result = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--sort", "size", "--json", "--no-progress"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    names = [item["name"] for item in payload]
+    assert names.index("large-app") < names.index("small-app")
+
+
+def test_scan_sort_size_reverse_is_ascending(tmp_path: Path) -> None:
+    """--sort size --reverse should flip to smallest first."""
+    small = make_sample_project(tmp_path, "small-app")
+    large = make_sample_project(tmp_path, "large-app")
+    (large / "big.bin").write_bytes(b"x" * 50_000)
+    (small / "tiny.bin").write_bytes(b"y" * 100)
+
+    result = runner.invoke(
+        app,
+        ["scan", str(tmp_path), "--sort", "size", "--reverse", "--json", "--no-progress"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    names = [item["name"] for item in payload]
+    assert names.index("small-app") < names.index("large-app")
+
+
+def test_scan_sort_name_after_status_filter(tmp_path: Path) -> None:
+    """--status filter should run before --sort name."""
+    make_git_project(tmp_path, "zebra-dirty", dirty=True)
+    make_git_project(tmp_path, "alpha-dirty", dirty=True)
+    make_git_project(tmp_path, "clean-app", dirty=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "scan",
+            str(tmp_path),
+            "--status",
+            "dirty",
+            "--sort",
+            "name",
+            "--json",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    names = [item["name"] for item in payload]
+    assert names == ["alpha-dirty", "zebra-dirty"]
+
+
+def test_scan_sort_unknown_exits_with_error(tmp_path: Path) -> None:
+    """Unknown --sort keys should fail fast with allowed values listed."""
+    make_sample_project(tmp_path)
+
+    result = runner.invoke(app, ["scan", str(tmp_path), "--sort", "weird", "--no-progress"])
+
+    assert result.exit_code == 2
+    assert "Unknown sort key" in result.output
+    assert "size" in result.output

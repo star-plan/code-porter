@@ -283,6 +283,96 @@ def test_clean_cli_json_output(tmp_path: Path) -> None:
     assert payload["targets"][0]["profile"] == "deps"
 
 
+def test_clean_cli_sort_size_largest_first(tmp_path: Path) -> None:
+    """--sort size should list largest clean targets first."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "package.json", "{}\n")
+    write_file(project / "node_modules" / "x" / "a.js", "big" * 5000 + "\n")
+    write_file(project / ".next" / "cache" / "a", "tiny\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "clean",
+            str(tmp_path),
+            "--json",
+            "--profile",
+            "all",
+            "--sort",
+            "size",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    names = [item["name"] for item in payload["targets"]]
+    assert names[0] == "node_modules"
+    assert ".next" in names
+
+
+def test_clean_cli_sort_profile_order(tmp_path: Path) -> None:
+    """--sort profile should follow deps → cache → build."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "package.json", "{}\n")
+    write_file(project / "dist" / "out.js", "1\n")
+    write_file(project / ".next" / "a", "1\n")
+    write_file(project / "node_modules" / "x" / "a.js", "1\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "clean",
+            str(tmp_path),
+            "--json",
+            "--profile",
+            "all",
+            "--sort",
+            "profile",
+            "--no-progress",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    profiles = [item["profile"] for item in payload["targets"]]
+    assert profiles == sorted(profiles, key=lambda p: {"deps": 0, "cache": 1, "build": 2}[p])
+
+
+def test_clean_default_order_is_profile_then_size(tmp_path: Path) -> None:
+    """Discovery default order should be PROFILE_ORDER then size descending."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "package.json", "{}\n")
+    write_file(project / "dist" / "out.js", "build-small\n")
+    write_file(project / "node_modules" / "x" / "a.js", "deps-large" * 200 + "\n")
+    write_file(project / ".next" / "a", "cache\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    profiles = [item.profile for item in plan.targets]
+    assert profiles == sorted(profiles, key=lambda p: {"deps": 0, "cache": 1, "build": 2}[p])
+    deps = [item for item in plan.targets if item.profile == "deps"]
+    assert deps[0].name == "node_modules"
+
+
+def test_clean_cli_sort_unknown_exits_with_error(tmp_path: Path) -> None:
+    """Unknown --sort keys should fail fast for clean."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "package.json", "{}\n")
+    write_file(project / "node_modules" / "x" / "a.js", "1\n")
+
+    result = runner.invoke(
+        app,
+        ["clean", str(tmp_path), "--sort", "weird", "--no-interactive", "--no-progress"],
+    )
+
+    assert result.exit_code == 2
+    assert "Unknown sort key" in result.output
+
+
 def test_enable_escape_cancel_binds_escape_and_aborts() -> None:
     """_enable_escape_cancel should make ESC cancel confirm and checkbox prompts."""
     import questionary

@@ -197,7 +197,15 @@ def discover_clean_targets(
         if on_project_scanned is not None:
             on_project_scanned(project_path, index, total)
 
-    targets.sort(key=lambda item: (item.profile, item.project_name.lower(), item.path.lower()))
+    # PROFILE_ORDER first (deps → cache → build), then largest reclaimable, then path.
+    profile_rank = {name: index for index, name in enumerate(PROFILE_ORDER)}
+    targets.sort(
+        key=lambda item: (
+            profile_rank.get(item.profile, 99),
+            -item.size_bytes,
+            item.path.lower(),
+        )
+    )
     return CleanPlan(
         projects=[path.name for path, _ in projects],
         targets=targets,

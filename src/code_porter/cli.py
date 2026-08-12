@@ -47,6 +47,23 @@ SCAN_STATUS_CHOICES = (
     "zip",
 )
 
+# Sort keys for scan/clean result lists. See docs/research/scan-clean-result-sort.md.
+SCAN_SORT_CHOICES = (
+    "path",
+    "name",
+    "size",
+    "type",
+    "package",
+    "export",
+)
+CLEAN_SORT_CHOICES = (
+    "profile",
+    "size",
+    "project",
+    "name",
+    "path",
+)
+
 
 def _matches_scan_status(report: ProjectReport, status: str) -> bool:
     """Return True if a project report matches one named scan status filter."""
@@ -88,6 +105,100 @@ def _filter_reports_by_status(
     if not wanted:
         return reports
     return [report for report in reports if any(_matches_scan_status(report, status) for status in wanted)]
+
+
+def _normalize_sort_key(raw: str | None, allowed: tuple[str, ...]) -> str | None:
+    """Normalize a --sort value; return None when unset, raise ValueError if unknown."""
+    if raw is None:
+        return None
+    key = raw.strip().lower()
+    if not key:
+        return None
+    if key not in allowed:
+        allowed_text = ", ".join(allowed)
+        raise ValueError(f"Unknown sort key: {raw!r}. Allowed: {allowed_text}")
+    return key
+
+
+def sort_project_reports(
+    reports: list[ProjectReport],
+    key: str | None,
+    *,
+    reverse: bool = False,
+) -> list[ProjectReport]:
+    """Sort scan reports by a named key; None keeps input order.
+
+    Natural direction: ``size`` largest first, ``export`` exportable first; others ascending.
+    ``reverse=True`` flips the full natural order.
+    """
+    if not key:
+        return list(reports)
+
+    def natural_key(report: ProjectReport) -> tuple:
+        """Encode natural (field-default) order with stable secondary fields."""
+        name = report.name.lower()
+        path = report.path.lower()
+        match key:
+            case "path":
+                return (path,)
+            case "name":
+                return (name, path)
+            case "size":
+                return (-report.size_bytes, name, path)
+            case "type":
+                return (report.project_type.value, name, path)
+            case "package":
+                return (report.packaging_strategy.value, name, path)
+            case "export":
+                # 0 = exportable first in natural order.
+                return (0 if report.worth_exporting else 1, name, path)
+            case _:
+                return (path,)
+
+    ordered = sorted(reports, key=natural_key)
+    if reverse:
+        ordered.reverse()
+    return ordered
+
+
+def sort_clean_targets(
+    targets: list[CleanTarget],
+    key: str | None,
+    *,
+    reverse: bool = False,
+) -> list[CleanTarget]:
+    """Sort clean targets by a named key; None keeps input order.
+
+    Natural direction: ``size`` largest first; ``profile`` follows PROFILE_ORDER
+    with largest size within each profile; others ascending by label then size.
+    """
+    if not key:
+        return list(targets)
+    profile_rank = {name: index for index, name in enumerate(PROFILE_ORDER)}
+
+    def natural_key(item: CleanTarget) -> tuple:
+        """Encode natural (field-default) order with stable secondary fields."""
+        path = item.path.lower()
+        project = item.project_name.lower()
+        name = item.name.lower()
+        match key:
+            case "profile":
+                return (profile_rank.get(item.profile, 99), -item.size_bytes, path)
+            case "size":
+                return (-item.size_bytes, path)
+            case "project":
+                return (project, -item.size_bytes, path)
+            case "name":
+                return (name, -item.size_bytes, path)
+            case "path":
+                return (path,)
+            case _:
+                return (path,)
+
+    ordered = sorted(targets, key=natural_key)
+    if reverse:
+        ordered.reverse()
+    return ordered
 
 
 def _report_row_style(report: ProjectReport) -> str:
@@ -517,6 +628,23 @@ def scan(
         ),
         case_sensitive=False,
     ),
+    sort_by: str | None = typer.Option(
+        None,
+        "--sort",
+        "-S",
+        help=(
+            "Sort results by field. "
+            f"Choices: {', '.join(SCAN_SORT_CHOICES)}. "
+            "size is largest-first; export lists exportable first"
+        ),
+        case_sensitive=False,
+    ),
+    reverse: bool = typer.Option(
+        False,
+        "--reverse",
+        "-r",
+        help="Reverse the sort order (flips the field's natural direction)",
+    ),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write scan result to a JSON file"),
     as_json: bool = typer.Option(False, "--json", help="Print only JSON to stdout (for scripts/pipes)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full table columns (remote, clean, large dirs, reasons)"),
@@ -531,6 +659,12 @@ def scan(
             f"[red]Unknown status filter(s): {', '.join(unknown)}. Allowed: {allowed}[/red]"
         )
         raise typer.Exit(code=2)
+
+    try:
+        sort_key = _normalize_sort_key(sort_by, SCAN_SORT_CHOICES)
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=2) from error
 
     options = default_scan_options(exclude, large_dir_threshold_mb, depth)
     # Pure JSON mode should stay quiet aside from the payload itself.
@@ -556,6 +690,7 @@ def scan(
 
     scanned_total = len(reports)
     reports = _filter_reports_by_status(reports, normalized_status)
+    reports = sort_project_reports(reports, sort_key, reverse=reverse)
 
     if as_json:
         # Machine-readable path: plain JSON only (no Rich styling / tables).
@@ -717,6 +852,23 @@ def clean(
     ),
     depth: int | None = typer.Option(None, "--depth", min=1, help="Max directory depth to discover projects from each root"),
     exclude: list[str] = typer.Option([], "--exclude", help="Additional directory names to skip while discovering projects"),
+    sort_by: str | None = typer.Option(
+        None,
+        "--sort",
+        "-S",
+        help=(
+            "Sort clean candidates by field. "
+            f"Choices: {', '.join(CLEAN_SORT_CHOICES)}. "
+            "size is largest-first; profile follows deps→cache→build"
+        ),
+        case_sensitive=False,
+    ),
+    reverse: bool = typer.Option(
+        False,
+        "--reverse",
+        "-r",
+        help="Reverse the sort order (flips the field's natural direction)",
+    ),
     json_output: Path | None = typer.Option(None, "--json-output", help="Write clean plan/result to a JSON file"),
     as_json: bool = typer.Option(False, "--json", help="Print only JSON to stdout (implies non-interactive)"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress bars"),
@@ -739,6 +891,12 @@ def clean(
         allowed = ", ".join(PROFILE_CHOICES)
         console.print(f"[red]Unknown profile(s): {', '.join(unknown)}. Allowed: {allowed}[/red]")
         raise typer.Exit(code=2)
+
+    try:
+        sort_key = _normalize_sort_key(sort_by, CLEAN_SORT_CHOICES)
+    except ValueError as error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=2) from error
 
     options = default_scan_options(exclude, depth=depth)
     show_progress = not no_progress and not as_json
@@ -765,6 +923,13 @@ def clean(
                 )
 
             plan = discover_clean_targets(roots, options, on_project_scanned=on_project_scanned)
+
+    # Optional re-order of the discovery plan (default order already PROFILE_ORDER + size).
+    if sort_key is not None:
+        plan = CleanPlan(
+            projects=list(plan.projects),
+            targets=sort_clean_targets(plan.targets, sort_key, reverse=reverse),
+        )
 
     if not plan.targets:
         if as_json:
