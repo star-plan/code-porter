@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TypeVar
 
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
+
+# Preserve the concrete questionary Question type through ESC binding helpers.
+_QuestionT = TypeVar("_QuestionT")
 
 from .archive import export_projects, import_packages, load_manifest
 from .cleaner import (
@@ -301,6 +305,38 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _enable_escape_cancel(question: _QuestionT) -> _QuestionT:
+    """Bind ESC so it aborts the prompt the same way as Ctrl+C.
+
+    questionary only wires Ctrl+C / Ctrl+Q by default. ESC is the expected
+    cancel key for interactive UIs. Checkbox prompts expose a mutable
+    KeyBindings object; confirm prompts wrap bindings in a merged/dynamic
+    layer, so we always merge an extra ESC binding onto the Application.
+    """
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.key_binding.key_bindings import merge_key_bindings
+    from prompt_toolkit.keys import Keys
+
+    application = getattr(question, "application", None)
+    if application is None:
+        return question
+
+    extra = KeyBindings()
+
+    @extra.add(Keys.Escape, eager=True)
+    def _cancel_on_escape(event) -> None:  # type: ignore[no-untyped-def]
+        """Exit the prompt with KeyboardInterrupt so .ask() returns None."""
+        event.app.exit(exception=KeyboardInterrupt, style="class:aborting")
+
+    existing = application.key_bindings
+    if existing is None:
+        application.key_bindings = extra
+    else:
+        application.key_bindings = merge_key_bindings([existing, extra])
+
+    return question
+
+
 def _render_clean_targets(targets: list[CleanTarget], *, title: str = "Clean Candidates") -> None:
     """Render discovered junk directories as a compact table."""
     table = Table(title=title)
@@ -413,11 +449,13 @@ def _prompt_clean_profiles(plan: CleanPlan) -> list[str] | None:
             ("selected", "fg:green"),
         ]
     )
-    selected = questionary.checkbox(
-        "Select profiles to clean (space to toggle, enter to confirm):",
-        choices=choices,
-        style=style,
-        instruction="deps is recommended; cache/build are optional",
+    selected = _enable_escape_cancel(
+        questionary.checkbox(
+            "Select profiles to clean (space to toggle, enter to confirm, esc to cancel):",
+            choices=choices,
+            style=style,
+            instruction="deps is recommended; cache/build are optional · esc cancels",
+        )
     ).ask()
     if selected is None:
         return None
@@ -432,9 +470,12 @@ def _prompt_confirm_clean(targets: list[CleanTarget]) -> bool | None:
     import questionary
 
     total = format_size(sum(item.size_bytes for item in targets))
-    result = questionary.confirm(
-        f"Permanently delete {len(targets)} directory(ies) (~{total})?",
-        default=False,
+    result = _enable_escape_cancel(
+        questionary.confirm(
+            f"Permanently delete {len(targets)} directory(ies) (~{total})?",
+            default=False,
+            instruction="(y/N, esc to cancel) ",
+        )
     ).ask()
     if result is None:
         return None
@@ -448,9 +489,12 @@ def _prompt_apply_now() -> bool | None:
     """
     import questionary
 
-    result = questionary.confirm(
-        "Apply deletion for the selected profiles now?",
-        default=False,
+    result = _enable_escape_cancel(
+        questionary.confirm(
+            "Apply deletion for the selected profiles now?",
+            default=False,
+            instruction="(y/N, esc to cancel) ",
+        )
     ).ask()
     if result is None:
         return None

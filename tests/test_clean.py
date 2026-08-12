@@ -281,3 +281,37 @@ def test_clean_cli_json_output(tmp_path: Path) -> None:
     assert payload["summary"]["target_count"] == 1
     assert payload["targets"][0]["name"] == "node_modules"
     assert payload["targets"][0]["profile"] == "deps"
+
+
+def test_enable_escape_cancel_binds_escape_and_aborts() -> None:
+    """_enable_escape_cancel should make ESC cancel confirm and checkbox prompts."""
+    import questionary
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.keys import Keys
+    from prompt_toolkit.output import DummyOutput
+
+    from code_porter.cli import _enable_escape_cancel
+
+    factories = (
+        lambda pipe, out: questionary.confirm(
+            "Proceed?", default=False, input=pipe, output=out
+        ),
+        lambda pipe, out: questionary.checkbox(
+            "Pick", choices=["deps", "cache"], input=pipe, output=out
+        ),
+    )
+
+    for factory in factories:
+        with create_pipe_input() as pipe_input:
+            question = _enable_escape_cancel(factory(pipe_input, DummyOutput()))
+            esc_bindings = [
+                binding
+                for binding in question.application.key_bindings.get_bindings_for_keys(
+                    (Keys.Escape,)
+                )
+                if binding.keys == (Keys.Escape,)
+            ]
+            assert esc_bindings, "ESC should be registered as a cancel binding"
+
+            pipe_input.send_text("\x1b")  # Escape
+            assert question.ask() is None, "ESC should cancel the prompt (return None)"
