@@ -6,6 +6,7 @@ on:
       - "**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/publish.yml"
+      - ".github/workflows/build-binaries.yml"
   push:
     branches:
       - main
@@ -13,6 +14,7 @@ on:
       - "**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/publish.yml"
+      - ".github/workflows/build-binaries.yml"
 
 jobs:
   test:

@@ -5,17 +5,18 @@ on:
     tags:
       - "v*.*.*"
 
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+# Build standalone binaries on each OS, publish the wheel to PyPI, and attach
+# binaries to a GitHub Release for end users without Python/uv.
+permissions:
+  contents: write
+  id-token: write
 
+jobs:
+  test:
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,7 +45,170 @@ jobs:
           wheel=$(ls dist/*.whl | head -n 1)
           uvx --from "$wheel" code-porter --help
 
+  build-binary:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: code-porter-windows-amd64.exe
+            binary_name: code-porter.exe
+          - os: ubuntu-22.04
+            asset_name: code-porter-linux-amd64
+            binary_name: code-porter
+          - os: macos-13
+            asset_name: code-porter-macos-amd64
+            binary_name: code-porter
+          - os: macos-14
+            asset_name: code-porter-macos-arm64
+            binary_name: code-porter
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Build standalone binary
+        run: uv run pyinstaller --noconfirm --clean packaging/code-porter.spec
+
+      - name: Stage release asset
+        run: |
+          mkdir -p release-assets
+          src="dist/${{ matrix.binary_name }}"
+          dst="release-assets/${{ matrix.asset_name }}"
+          if [[ ! -f "$src" ]]; then
+            echo "Built binary not found: $src"
+            ls -la dist || true
+            exit 1
+          fi
+          cp "$src" "$dst"
+          chmod +x "$dst" || true
+          ls -lh "$dst"
+
+      - name: Smoke test binary
+        run: |
+          bin="release-assets/${{ matrix.asset_name }}"
+          "$bin" --help
+          # Minimal non-interactive scan against an empty workspace root
+          tmpdir="$(mktemp -d)"
+          mkdir -p "$tmpdir/sample-project"
+          printf '# demo\n' > "$tmpdir/sample-project/README.md"
+          "$bin" scan "$tmpdir" --json >/dev/null
+          "$bin" clean "$tmpdir" --help >/dev/null
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.asset_name }}
+          path: release-assets/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-pypi:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build package
+        run: uv build
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+
+  github-release:
+    needs: build-binary
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          ls -lh
+          # One line per asset: "<sha256>  <filename>"
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release-assets/*
+          body: |
+            ## Download prebuilt binaries
+
+            Pick the file for your platform (no Python/uv install required):
+
+            | Platform | File |
+            |----------|------|
+            | Windows (x64) | `code-porter-windows-amd64.exe` |
+            | Linux (x64) | `code-porter-linux-amd64` |
+            | macOS (Intel) | `code-porter-macos-amd64` |
+            | macOS (Apple Silicon) | `code-porter-macos-arm64` |
+
+            **Requirement:** [Git](https://git-scm.com/) must be installed and available on `PATH` (used for bundle export/import).
+
+            ### Quick start
+
+            ```bash
+            # Linux / macOS
+            chmod +x code-porter-linux-amd64   # or the macOS asset
+            ./code-porter-linux-amd64 --help
+
+            # Windows (PowerShell / cmd)
+            .\code-porter-windows-amd64.exe --help
+            ```
+
+            Verify downloads with `SHA256SUMS`.
+
+            ### Notes
+
+            - Unsigned binaries may be blocked by Windows SmartScreen or macOS Gatekeeper; use “More info → Run anyway” / right-click → Open when prompted.
+            - Developers can still use `uvx code-porter` or install from PyPI.

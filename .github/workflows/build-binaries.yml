@@ -1,0 +1,85 @@
+name: build-binaries
+
+# Manual / PR-friendly binary smoke builds without publishing a release.
+# Full multi-platform release assets are produced by publish.yml on version tags.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/build-binaries.yml"
+      - ".github/workflows/publish.yml"
+
+jobs:
+  build-binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: code-porter-windows-amd64.exe
+            binary_name: code-porter.exe
+          - os: ubuntu-22.04
+            asset_name: code-porter-linux-amd64
+            binary_name: code-porter
+          - os: macos-14
+            asset_name: code-porter-macos-arm64
+            binary_name: code-porter
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Build standalone binary
+        run: uv run pyinstaller --noconfirm --clean packaging/code-porter.spec
+
+      - name: Stage release asset
+        run: |
+          mkdir -p release-assets
+          src="dist/${{ matrix.binary_name }}"
+          dst="release-assets/${{ matrix.asset_name }}"
+          if [[ ! -f "$src" ]]; then
+            echo "Built binary not found: $src"
+            ls -la dist || true
+            exit 1
+          fi
+          cp "$src" "$dst"
+          chmod +x "$dst" || true
+          ls -lh "$dst"
+
+      - name: Smoke test binary
+        run: |
+          bin="release-assets/${{ matrix.asset_name }}"
+          "$bin" --help
+          tmpdir="$(mktemp -d)"
+          mkdir -p "$tmpdir/sample-project"
+          printf '# demo\n' > "$tmpdir/sample-project/README.md"
+          "$bin" scan "$tmpdir" --json >/dev/null
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.asset_name }}
+          path: release-assets/${{ matrix.asset_name }}
+          if-no-files-found: error
+          retention-days: 7
