@@ -859,7 +859,7 @@ def clean(
         help=(
             "Sort clean candidates by field. "
             f"Choices: {', '.join(CLEAN_SORT_CHOICES)}. "
-            "size is largest-first; profile follows deps→cache→build"
+            "size is largest-first; profile follows deps -> cache -> build"
         ),
         case_sensitive=False,
     ),

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from rich.console import Console
+from typer.main import get_command
 from typer.testing import CliRunner
 
 import code_porter.cli as cli_module
@@ -355,6 +356,16 @@ def test_clean_default_order_is_profile_then_size(tmp_path: Path) -> None:
     assert profiles == sorted(profiles, key=lambda p: {"deps": 0, "cache": 1, "build": 2}[p])
     deps = [item for item in plan.targets if item.profile == "deps"]
     assert deps[0].name == "node_modules"
+
+
+def test_clean_help_encodes_on_legacy_windows() -> None:
+    """clean option help must encode as cp1252 (Windows Rich legacy_windows_render)."""
+    clean = get_command(app).commands["clean"]
+    texts = [clean.help or ""]
+    texts.extend(param.help or "" for param in clean.params)
+    combined = "\n".join(texts)
+    assert "deps -> cache -> build" in combined
+    combined.encode("cp1252")
 
 
 def test_clean_cli_sort_unknown_exits_with_error(tmp_path: Path) -> None:
