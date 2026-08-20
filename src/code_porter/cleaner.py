@@ -12,7 +12,7 @@ from .scanner import ScanOptions, discover_projects
 # Never delete these, even if a profile somehow listed them.
 PROTECTED_DIR_NAMES = {".git"}
 
-# Profiles group directory basenames by rebuild risk.
+# Unambiguous junk dir names grouped by rebuild risk.
 # dry-run previews all profiles; apply only deletes selected ones.
 # Matching is basename-only: nested caches (e.g. .tmp/uv-cache) are cleaned
 # without deleting a mixed parent like .tmp that may hold real project files.
@@ -63,6 +63,11 @@ CLEAN_PROFILES: dict[str, frozenset[str]] = {
 
 PROFILE_ORDER = ("deps", "cache", "build")
 PROFILE_CHOICES = (*PROFILE_ORDER, "all")
+
+# Ambiguous names: only junk when the parent directory looks like a .NET project.
+# Do not put these in CLEAN_PROFILES — a scripts/bin folder is often source.
+CONTEXTUAL_BUILD_DIR_NAMES = frozenset({"bin", "obj"})
+DOTNET_PROJECT_SUFFIXES = (".csproj", ".fsproj", ".vbproj", ".sln")
 
 
 @dataclass(slots=True)
@@ -143,14 +148,70 @@ def normalize_profiles(profiles: Iterable[str]) -> set[str]:
     return result
 
 
+def is_dotnet_project_filename(name: str) -> bool:
+    """Return True if the filename is a .NET project or solution file."""
+    lowered = name.lower()
+    return lowered.endswith(DOTNET_PROJECT_SUFFIXES)
+
+
+def has_dotnet_project_file(file_names: Iterable[str]) -> bool:
+    """Return True if any name in the listing is a .NET project or solution file."""
+    return any(is_dotnet_project_filename(name) for name in file_names)
+
+
+def list_parent_filenames(directory: Path) -> list[str]:
+    """List file names in a directory; return empty on permission or IO errors."""
+    try:
+        return [entry.name for entry in directory.iterdir() if entry.is_file()]
+    except OSError:
+        return []
+
+
 def profile_for_dirname(name: str) -> str | None:
-    """Map a directory basename to its clean profile, if any."""
+    """Map an unambiguous directory basename to its clean profile, if any.
+
+    Does not apply contextual rules: ``bin`` / ``obj`` always return None here.
+    """
     if name in PROTECTED_DIR_NAMES:
         return None
     for profile in PROFILE_ORDER:
         if name in CLEAN_PROFILES[profile]:
             return profile
     return None
+
+
+def profile_for_directory(name: str, parent_files: Iterable[str] | None = None) -> str | None:
+    """Resolve a directory's clean profile using basename, then contextual rules.
+
+    Unambiguous names (node_modules, dist, ...) match by basename only.
+    ``bin`` / ``obj`` match the build profile only when the parent directory
+    contains a .NET project file (.csproj / .fsproj / .vbproj / .sln).
+    """
+    if name in PROTECTED_DIR_NAMES:
+        return None
+    profile = profile_for_dirname(name)
+    if profile is not None:
+        return profile
+    if name in CONTEXTUAL_BUILD_DIR_NAMES and parent_files is not None:
+        if has_dotnet_project_file(parent_files):
+            return "build"
+    return None
+
+
+def profile_for_path(path: Path) -> str | None:
+    """Resolve a live directory path to a clean profile, or None if it is not junk.
+
+    Used at apply time so deletion uses the same neighbor-file rule as discovery.
+    """
+    return profile_for_directory(path.name, parent_files=list_parent_filenames(path.parent))
+
+
+def profile_label_names(profile: str) -> list[str]:
+    """Directory names shown in UI for a profile, including contextual .NET dirs."""
+    names = sorted(CLEAN_PROFILES[profile])
+    if profile == "build":
+        names.extend(["bin (.NET)", "obj (.NET)"])
+    return names
 
 
 def directory_size(path: Path) -> int:
@@ -220,7 +281,7 @@ def _discover_targets_in_project(project_path: Path, all_project_roots: set[Path
     except OSError:
         return found
 
-    for current_path, dir_names, _file_names in walker:
+    for current_path, dir_names, file_names in walker:
         # Nested projects are cleaned via their own root, not the parent walk.
         if current_path != project_path and current_path in all_project_roots:
             dir_names.clear()
@@ -230,8 +291,9 @@ def _discover_targets_in_project(project_path: Path, all_project_roots: set[Path
         dir_names[:] = [name for name in dir_names if name not in PROTECTED_DIR_NAMES]
 
         matched_names: list[str] = []
+        parent_files = file_names
         for name in list(dir_names):
-            profile = profile_for_dirname(name)
+            profile = profile_for_directory(name, parent_files=parent_files)
             if profile is None:
                 continue
             matched_names.append(name)
@@ -304,7 +366,7 @@ def apply_clean_targets(
         elif path.name in PROTECTED_DIR_NAMES:
             target.status = "skipped"
             target.detail = "protected directory"
-        elif profile_for_dirname(path.name) is None:
+        elif profile_for_path(path) is None:
             target.status = "skipped"
             target.detail = "directory is not in any clean profile"
         else:

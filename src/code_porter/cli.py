@@ -15,7 +15,6 @@ _QuestionT = TypeVar("_QuestionT")
 
 from .archive import export_projects, import_packages, load_manifest
 from .cleaner import (
-    CLEAN_PROFILES,
     PROFILE_CHOICES,
     PROFILE_ORDER,
     CleanPlan,
@@ -24,6 +23,7 @@ from .cleaner import (
     discover_clean_targets,
     format_size,
     normalize_profiles,
+    profile_label_names,
     summarize_targets,
 )
 from .models import PackagingStrategy, ProjectReport, ProjectType, SafetyReport
@@ -538,7 +538,7 @@ def _prompt_clean_profiles(plan: CleanPlan) -> list[str] | None:
         data = by_profile.get(profile) if isinstance(by_profile.get(profile), dict) else None
         count = int(data["count"]) if data else 0
         size_human = str(data["size_human"]) if data else "0B"
-        names = ", ".join(sorted(CLEAN_PROFILES[profile]))
+        names = ", ".join(profile_label_names(profile))
         label = f"{profile:5}  {count:3} dir(s)  {size_human:>8}  [{names}]"
         # Recommend deps by default; still show empty profiles as disabled-looking info.
         choices.append(

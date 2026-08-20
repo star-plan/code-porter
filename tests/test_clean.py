@@ -13,10 +13,13 @@ from typer.testing import CliRunner
 
 import code_porter.cli as cli_module
 from code_porter.cleaner import (
+    CleanTarget,
     apply_clean_targets,
     discover_clean_targets,
     normalize_profiles,
+    profile_for_directory,
     profile_for_dirname,
+    profile_label_names,
 )
 from code_porter.cli import app
 from code_porter.scanner import default_scan_options
@@ -71,6 +74,32 @@ def test_profile_for_dirname_maps_known_and_protected() -> None:
     assert profile_for_dirname(".tmp") is None
     assert profile_for_dirname("sdists-v9") is None
     assert profile_for_dirname("src") is None
+    # Ambiguous names must not match by basename alone.
+    assert profile_for_dirname("bin") is None
+    assert profile_for_dirname("obj") is None
+
+
+def test_profile_for_directory_dotnet_neighbors() -> None:
+    """bin/obj are build targets only when a .NET project file sits beside them."""
+    assert profile_for_directory("bin", parent_files=["OutboxSmokeTest.csproj", "Program.cs"]) == "build"
+    assert profile_for_directory("obj", parent_files=["Lib.fsproj"]) == "build"
+    assert profile_for_directory("bin", parent_files=["App.vbproj"]) == "build"
+    assert profile_for_directory("obj", parent_files=["StarBlog.sln"]) == "build"
+    assert profile_for_directory("bin", parent_files=["APP.CSPROJ"]) == "build"
+    assert profile_for_directory("bin", parent_files=["run.sh", "README.md"]) is None
+    assert profile_for_directory("bin") is None
+    assert profile_for_directory("obj", parent_files=[]) is None
+    assert profile_for_directory("src", parent_files=["App.csproj"]) is None
+    assert profile_for_directory(".git", parent_files=["App.csproj"]) is None
+
+
+def test_profile_label_names_mentions_dotnet_bin_obj() -> None:
+    """Build profile UI labels should distinguish contextual .NET bin/obj."""
+    labels = profile_label_names("build")
+    assert "dist" in labels
+    assert "bin (.NET)" in labels
+    assert "obj (.NET)" in labels
+    assert "bin (.NET)" not in profile_label_names("deps")
 
 
 def test_normalize_profiles_expands_all() -> None:
@@ -177,6 +206,120 @@ def test_discover_skips_nested_project_roots(tmp_path: Path) -> None:
     # Nested target should be attributed to the child project, not the parent.
     child_target = next(item for item in plan.targets if item.path == str(child / "node_modules"))
     assert child_target.project_name == "child"
+
+
+def test_discover_dotnet_bin_obj_next_to_csproj(tmp_path: Path) -> None:
+    """bin/obj beside a .csproj are build targets; a scripts/bin folder is not.
+
+    The git root has no .sln, so project type is unknown — neighbor files still count.
+    """
+    project = tmp_path / "starblog"
+    project.mkdir()
+    init_git_repo(project)
+    csproj_dir = project / "demo" / "OutboxSmokeTest"
+    write_file(csproj_dir / "OutboxSmokeTest.csproj", "<Project Sdk='Microsoft.NET.Sdk' />\n")
+    write_file(csproj_dir / "Program.cs", "class P {}\n")
+    write_file(csproj_dir / "bin" / "Debug" / "app.dll", "dll\n")
+    write_file(csproj_dir / "obj" / "project.assets.json", "{}\n")
+    write_file(project / "scripts" / "bin" / "run.sh", "echo hi\n")
+    write_file(project / "src" / "obj" / "mesh.obj", "v 0 0 0\n")
+    write_file(project / "README.md", "hi\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    paths = {item.path for item in plan.targets}
+
+    assert str(csproj_dir / "bin") in paths
+    assert str(csproj_dir / "obj") in paths
+    assert str(project / "scripts" / "bin") not in paths
+    assert str(project / "src" / "obj") not in paths
+    bin_target = next(item for item in plan.targets if item.path == str(csproj_dir / "bin"))
+    obj_target = next(item for item in plan.targets if item.path == str(csproj_dir / "obj"))
+    assert bin_target.profile == "build"
+    assert obj_target.profile == "build"
+    assert bin_target.project_name == "starblog"
+    assert bin_target.size_bytes > 0
+
+
+def test_discover_dotnet_bin_inside_python_repo(tmp_path: Path) -> None:
+    """A nested .csproj bin/obj is cleaned even if the repo is typed python."""
+    project = tmp_path / "mixed"
+    project.mkdir()
+    write_file(project / "pyproject.toml", "[project]\nname='mixed'\n")
+    write_file(project / "src" / "main.py", "print(1)\n")
+    nested = project / "demo" / "Tool"
+    write_file(nested / "Tool.csproj", "<Project />\n")
+    write_file(nested / "bin" / "Release" / "Tool.dll", "dll\n")
+    write_file(nested / "obj" / "Tool.csproj.nuget.g.props", "<Project />\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    paths = {item.path for item in plan.targets}
+    assert str(nested / "bin") in paths
+    assert str(nested / "obj") in paths
+
+
+@pytest.mark.parametrize(
+    "project_file",
+    ["App.fsproj", "App.vbproj", "App.sln", "app.CSPROJ"],
+)
+def test_discover_dotnet_bin_next_to_other_project_files(tmp_path: Path, project_file: str) -> None:
+    """fsproj, vbproj, sln, and case-variant csproj all count as neighbors."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "package.json", "{}\n")
+    write_file(project / project_file, "placeholder\n")
+    write_file(project / "bin" / "Debug" / "a.dll", "dll\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    paths = {item.path for item in plan.targets}
+    assert str(project / "bin") in paths
+
+
+def test_apply_dotnet_bin_obj_keeps_sources(tmp_path: Path) -> None:
+    """Applying the build profile should delete .NET bin/obj and keep sources."""
+    project = tmp_path / "app"
+    project.mkdir()
+    # package.json makes this a discovered project without relying on .csproj markers.
+    write_file(project / "package.json", "{}\n")
+    write_file(project / "App.csproj", "<Project />\n")
+    write_file(project / "Program.cs", "class P {}\n")
+    bin_dir = project / "bin"
+    obj_dir = project / "obj"
+    write_file(bin_dir / "Debug" / "App.dll", "dll\n")
+    write_file(obj_dir / "project.assets.json", "{}\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    build_only = plan.filter_profiles(["build"]).targets
+    apply_clean_targets(build_only)
+
+    assert not bin_dir.exists()
+    assert not obj_dir.exists()
+    assert (project / "App.csproj").exists()
+    assert (project / "Program.cs").exists()
+    assert all(item.status == "deleted" for item in build_only)
+
+
+def test_apply_skips_generic_bin_without_dotnet_neighbor(tmp_path: Path) -> None:
+    """Apply must re-check the neighbor rule, not trust a forged basename-only target."""
+    project = tmp_path / "scripts"
+    project.mkdir()
+    write_file(project / "package.json", "{}\n")
+    bin_dir = project / "bin"
+    write_file(bin_dir / "run.sh", "echo hi\n")
+
+    forged = CleanTarget(
+        project_name=project.name,
+        project_path=str(project),
+        path=str(bin_dir),
+        name="bin",
+        profile="build",
+        size_bytes=1,
+    )
+    apply_clean_targets([forged])
+
+    assert bin_dir.exists()
+    assert (bin_dir / "run.sh").exists()
+    assert forged.status == "skipped"
+    assert "not in any clean profile" in forged.detail
 
 
 def test_apply_clean_targets_deletes_only_selected(tmp_path: Path) -> None:
