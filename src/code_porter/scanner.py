@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .junk import directory_has_solution_file, has_dotnet_project_file, should_skip_directory
 from .models import PackagingStrategy, ProjectReport, ProjectType, SafetyReport
 
 MARKERS: dict[str, ProjectType] = {
@@ -23,6 +24,7 @@ DEFAULT_EXCLUDES = {
     ".next",
     ".venv",
     ".uv-cache",
+    ".vs",  # Visual Studio user/cache directory
     "build",
     "dist",
     "gocache",
@@ -79,6 +81,11 @@ def scan_local_roots_with_progress(
 
 
 def discover_projects(root: Path, excludes: set[str], depth: int | None = None) -> dict[Path, ProjectType]:
+    """Walk ``root`` and return project directories mapped to inferred types.
+
+    Skips basename excludes and contextual junk (e.g. .NET bin/obj) so those
+    trees are not treated as nested projects.
+    """
     if not root.exists():
         raise FileNotFoundError(f"Scan root does not exist: {root}")
 
@@ -92,7 +99,11 @@ def discover_projects(root: Path, excludes: set[str], depth: int | None = None) 
                 continue
 
         has_git_dir = ".git" in dir_names
-        dir_names[:] = [name for name in dir_names if name not in excludes]
+        dir_names[:] = [
+            name
+            for name in dir_names
+            if not should_skip_directory(name, file_names, current_path / name, excludes)
+        ]
         file_set = set(file_names)
 
         if has_git_dir or (current_path / ".git").exists():
@@ -100,26 +111,51 @@ def discover_projects(root: Path, excludes: set[str], depth: int | None = None) 
 
         detected_type = infer_project_type(file_set)
         if detected_type != ProjectType.UNKNOWN:
-            project_root = resolve_project_root(current_path, root)
+            project_root = resolve_project_root(
+                current_path,
+                root,
+                prefer_sln=(detected_type == ProjectType.DOTNET),
+            )
             existing = project_roots.get(project_root)
+            # Nested csproj should win over a nested package.json (walk order
+            # is not a type signal). A later DOTNET marker also upgrades an
+            # earlier non-dotnet guess on the same git/sln root.
             if existing is None or existing == ProjectType.UNKNOWN:
                 project_roots[project_root] = detected_type
+            elif detected_type == ProjectType.DOTNET:
+                project_roots[project_root] = ProjectType.DOTNET
 
     return project_roots
 
 
-def resolve_project_root(path: Path, scan_root: Path) -> Path:
+def resolve_project_root(path: Path, scan_root: Path, *, prefer_sln: bool = False) -> Path:
+    """Walk up from a marker directory to the owning project root.
+
+    Git always wins. For .NET markers without git, collapse to the nearest
+    ancestor (including self) that contains a .sln so a solution is one project
+    instead of one project per csproj.
+    """
     current = path
+    nearest_sln: Path | None = None
     while True:
         if (current / ".git").exists():
             return current
+        if prefer_sln and nearest_sln is None and directory_has_solution_file(current):
+            nearest_sln = current
         if current == scan_root:
+            if prefer_sln and nearest_sln is not None:
+                return nearest_sln
             return path
         current = current.parent
 
 
 def infer_project_type(file_set: set[str]) -> ProjectType:
-    if any(name.endswith(".sln") for name in file_set):
+    """Classify a directory from the filenames it contains.
+
+    .NET project/solution files take priority over package.json and friends so
+    an ASP.NET app with a client package.json still types as dotnet.
+    """
+    if has_dotnet_project_file(file_set):
         return ProjectType.DOTNET
     for marker, project_type in MARKERS.items():
         if marker in file_set:
@@ -193,14 +229,23 @@ def git_is_shallow(path: Path, is_git_repo: bool) -> bool:
 
 
 def summarize_directory(path: Path, options: ScanOptions) -> tuple[int, list[str], list[str]]:
+    """Return total size, large first-level dirs, and ignored junk dir names.
+
+    Contextual .NET bin/obj (and similar) are omitted from the size total and
+    listed in ignored names, without treating a script ``bin/`` as junk.
+    """
     total_size = 0
     directory_sizes: dict[str, int] = {}
     ignored_present: set[str] = set()
 
     for current_path, dir_names, file_names in path.walk(top_down=True):
-        ignored_here = [name for name in dir_names if name in options.excludes]
+        ignored_here = [
+            name
+            for name in dir_names
+            if should_skip_directory(name, file_names, current_path / name, options.excludes)
+        ]
         ignored_present.update(ignored_here)
-        dir_names[:] = [name for name in dir_names if name not in options.excludes]
+        dir_names[:] = [name for name in dir_names if name not in ignored_here]
 
         relative = current_path.relative_to(path)
         bucket = "." if str(relative) == "." else relative.parts[0]

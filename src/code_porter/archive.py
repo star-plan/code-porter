@@ -12,6 +12,7 @@ from pathlib import Path
 import pathspec
 
 from .models import ArchiveKind, ExportManifest, PackageEntry, PackagingStrategy, ProjectReport, ProjectType
+from .junk import contextual_junk_profile
 from .scanner import DEFAULT_EXCLUDES
 
 
@@ -263,6 +264,7 @@ def create_git_bundle(project_path: Path, bundle_path: Path) -> None:
 
 
 def create_zip_archive(project_path: Path, archive_path: Path) -> None:
+    """Zip a project tree, honoring .gitignore, default excludes, and contextual junk."""
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     matcher = build_ignore_matcher(project_path)
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
@@ -272,6 +274,7 @@ def create_zip_archive(project_path: Path, archive_path: Path) -> None:
                 name
                 for name in dir_names
                 if not matcher((relative_dir / name).as_posix(), is_dir=True)
+                and contextual_junk_profile(name, file_names, current_path / name) is None
             ]
 
             for file_name in file_names:

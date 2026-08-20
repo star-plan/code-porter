@@ -188,6 +188,36 @@ def test_export_zip_honors_gitignore_and_default_excludes(tmp_path: Path) -> Non
     assert "node_modules/left-pad.js" not in names
 
 
+def test_export_zip_skips_dotnet_bin_keeps_script_bin(tmp_path: Path) -> None:
+    """Zip export should drop csproj-adjacent bin/obj but keep a scripts/bin."""
+    project_dir = tmp_path / "dotnet-app"
+    project_dir.mkdir()
+    (project_dir / "App.csproj").write_text("<Project />\n", encoding="utf-8")
+    (project_dir / "Program.cs").write_text("class P {}\n", encoding="utf-8")
+    (project_dir / "bin" / "Debug").mkdir(parents=True)
+    (project_dir / "bin" / "Debug" / "App.dll").write_text("dll\n", encoding="utf-8")
+    (project_dir / "obj").mkdir()
+    (project_dir / "obj" / "project.assets.json").write_text("{}\n", encoding="utf-8")
+    (project_dir / "scripts" / "bin").mkdir(parents=True)
+    (project_dir / "scripts" / "bin" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (project_dir / ".vs" / "App").mkdir(parents=True)
+    (project_dir / ".vs" / "App" / ".suo").write_text("vs\n", encoding="utf-8")
+
+    reports = scan_local_roots([tmp_path], default_scan_options())
+    outcome = export_projects(reports, tmp_path / "exported", [tmp_path])
+    package = outcome.manifest.packages[0]
+
+    with zipfile.ZipFile(tmp_path / "exported" / package.package_path, "r") as zip_file:
+        names = set(zip_file.namelist())
+
+    assert "Program.cs" in names
+    assert "App.csproj" in names
+    assert "scripts/bin/run.sh" in names
+    assert "bin/Debug/App.dll" not in names
+    assert "obj/project.assets.json" not in names
+    assert not any(name.startswith(".vs/") for name in names)
+
+
 def test_import_restores_bundle_and_zip_packages(tmp_path: Path) -> None:
     git_project = tmp_path / "git-app"
     git_project.mkdir()

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .junk import contextual_junk_profile
 from .scanner import ScanOptions, discover_projects
 
 # Never delete these, even if a profile somehow listed them.
@@ -48,6 +49,7 @@ CLEAN_PROFILES: dict[str, frozenset[str]] = {
             ".ipynb_checkpoints",
             "gocache",  # project-local GOCACHE
             ".gocache",
+            ".vs",
         }
     ),
     "build": frozenset(
@@ -64,10 +66,11 @@ CLEAN_PROFILES: dict[str, frozenset[str]] = {
 PROFILE_ORDER = ("deps", "cache", "build")
 PROFILE_CHOICES = (*PROFILE_ORDER, "all")
 
-# Ambiguous names: only junk when the parent directory looks like a .NET project.
-# Do not put these in CLEAN_PROFILES — a scripts/bin folder is often source.
-CONTEXTUAL_BUILD_DIR_NAMES = frozenset({"bin", "obj"})
-DOTNET_PROJECT_SUFFIXES = (".csproj", ".fsproj", ".vbproj", ".sln")
+# Extra UI labels for contextual names that are not in CLEAN_PROFILES.
+_PROFILE_CONTEXTUAL_LABELS: dict[str, tuple[str, ...]] = {
+    "deps": ("packages (NuGet)",),
+    "build": ("bin (.NET)", "obj (.NET)", "TestResults (.NET)"),
+}
 
 
 @dataclass(slots=True)
@@ -148,17 +151,6 @@ def normalize_profiles(profiles: Iterable[str]) -> set[str]:
     return result
 
 
-def is_dotnet_project_filename(name: str) -> bool:
-    """Return True if the filename is a .NET project or solution file."""
-    lowered = name.lower()
-    return lowered.endswith(DOTNET_PROJECT_SUFFIXES)
-
-
-def has_dotnet_project_file(file_names: Iterable[str]) -> bool:
-    """Return True if any name in the listing is a .NET project or solution file."""
-    return any(is_dotnet_project_filename(name) for name in file_names)
-
-
 def list_parent_filenames(directory: Path) -> list[str]:
     """List file names in a directory; return empty on permission or IO errors."""
     try:
@@ -170,7 +162,8 @@ def list_parent_filenames(directory: Path) -> list[str]:
 def profile_for_dirname(name: str) -> str | None:
     """Map an unambiguous directory basename to its clean profile, if any.
 
-    Does not apply contextual rules: ``bin`` / ``obj`` always return None here.
+    Does not apply contextual rules: ``bin`` / ``obj`` / ``TestResults`` /
+    NuGet ``packages`` always return None here.
     """
     if name in PROTECTED_DIR_NAMES:
         return None
@@ -180,22 +173,25 @@ def profile_for_dirname(name: str) -> str | None:
     return None
 
 
-def profile_for_directory(name: str, parent_files: Iterable[str] | None = None) -> str | None:
+def profile_for_directory(
+    name: str,
+    parent_files: Iterable[str] | None = None,
+    directory: Path | None = None,
+) -> str | None:
     """Resolve a directory's clean profile using basename, then contextual rules.
 
-    Unambiguous names (node_modules, dist, ...) match by basename only.
-    ``bin`` / ``obj`` match the build profile only when the parent directory
-    contains a .NET project file (.csproj / .fsproj / .vbproj / .sln).
+    Unambiguous names (node_modules, dist, .vs, ...) match by basename only.
+    Ambiguous names (bin, obj, TestResults, NuGet packages) use neighbor files
+    and, when needed, a peek inside ``directory``.
     """
     if name in PROTECTED_DIR_NAMES:
         return None
     profile = profile_for_dirname(name)
     if profile is not None:
         return profile
-    if name in CONTEXTUAL_BUILD_DIR_NAMES and parent_files is not None:
-        if has_dotnet_project_file(parent_files):
-            return "build"
-    return None
+    if parent_files is None:
+        return None
+    return contextual_junk_profile(name, parent_files, directory)
 
 
 def profile_for_path(path: Path) -> str | None:
@@ -203,14 +199,17 @@ def profile_for_path(path: Path) -> str | None:
 
     Used at apply time so deletion uses the same neighbor-file rule as discovery.
     """
-    return profile_for_directory(path.name, parent_files=list_parent_filenames(path.parent))
+    return profile_for_directory(
+        path.name,
+        parent_files=list_parent_filenames(path.parent),
+        directory=path,
+    )
 
 
 def profile_label_names(profile: str) -> list[str]:
     """Directory names shown in UI for a profile, including contextual .NET dirs."""
     names = sorted(CLEAN_PROFILES[profile])
-    if profile == "build":
-        names.extend(["bin (.NET)", "obj (.NET)"])
+    names.extend(_PROFILE_CONTEXTUAL_LABELS.get(profile, ()))
     return names
 
 
@@ -293,7 +292,11 @@ def _discover_targets_in_project(project_path: Path, all_project_roots: set[Path
         matched_names: list[str] = []
         parent_files = file_names
         for name in list(dir_names):
-            profile = profile_for_directory(name, parent_files=parent_files)
+            profile = profile_for_directory(
+                name,
+                parent_files=parent_files,
+                directory=current_path / name,
+            )
             if profile is None:
                 continue
             matched_names.append(name)

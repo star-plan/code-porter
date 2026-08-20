@@ -70,6 +70,7 @@ def test_profile_for_dirname_maps_known_and_protected() -> None:
     assert profile_for_dirname(".next") == "cache"
     assert profile_for_dirname("gocache") == "cache"
     assert profile_for_dirname("dist") == "build"
+    assert profile_for_dirname(".vs") == "cache"
     assert profile_for_dirname(".git") is None
     assert profile_for_dirname(".tmp") is None
     assert profile_for_dirname("sdists-v9") is None
@@ -85,12 +86,16 @@ def test_profile_for_directory_dotnet_neighbors() -> None:
     assert profile_for_directory("obj", parent_files=["Lib.fsproj"]) == "build"
     assert profile_for_directory("bin", parent_files=["App.vbproj"]) == "build"
     assert profile_for_directory("obj", parent_files=["StarBlog.sln"]) == "build"
+    assert profile_for_directory("bin", parent_files=["StarBlog.slnx"]) == "build"
     assert profile_for_directory("bin", parent_files=["APP.CSPROJ"]) == "build"
     assert profile_for_directory("bin", parent_files=["run.sh", "README.md"]) is None
     assert profile_for_directory("bin") is None
     assert profile_for_directory("obj", parent_files=[]) is None
     assert profile_for_directory("src", parent_files=["App.csproj"]) is None
     assert profile_for_directory(".git", parent_files=["App.csproj"]) is None
+    assert profile_for_directory("TestResults", parent_files=["App.csproj"]) == "build"
+    assert profile_for_directory("TestResults", parent_files=["README.md"]) is None
+    assert profile_for_directory("packages", parent_files=["App.sln"]) is None
 
 
 def test_profile_label_names_mentions_dotnet_bin_obj() -> None:
@@ -99,7 +104,9 @@ def test_profile_label_names_mentions_dotnet_bin_obj() -> None:
     assert "dist" in labels
     assert "bin (.NET)" in labels
     assert "obj (.NET)" in labels
+    assert "TestResults (.NET)" in labels
     assert "bin (.NET)" not in profile_label_names("deps")
+    assert "packages (NuGet)" in profile_label_names("deps")
 
 
 def test_normalize_profiles_expands_all() -> None:
@@ -320,6 +327,62 @@ def test_apply_skips_generic_bin_without_dotnet_neighbor(tmp_path: Path) -> None
     assert (bin_dir / "run.sh").exists()
     assert forged.status == "skipped"
     assert "not in any clean profile" in forged.detail
+
+
+def test_discover_standalone_csproj_without_git(tmp_path: Path) -> None:
+    """A folder with only a .csproj (no git) should still be cleaned as a project."""
+    project = tmp_path / "OutboxSmokeTest"
+    project.mkdir()
+    write_file(project / "OutboxSmokeTest.csproj", "<Project />\n")
+    write_file(project / "Program.cs", "class P {}\n")
+    write_file(project / "bin" / "Debug" / "app.dll", "dll\n")
+    write_file(project / "obj" / "project.assets.json", "{}\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    paths = {item.path for item in plan.targets}
+    assert str(project / "bin") in paths
+    assert str(project / "obj") in paths
+    assert all(item.project_name == "OutboxSmokeTest" for item in plan.targets)
+
+
+def test_discover_vs_testresults_and_nuget_packages(tmp_path: Path) -> None:
+    """Visual Studio cache, VSTest results, and classic NuGet packages are junk."""
+    project = tmp_path / "app"
+    project.mkdir()
+    write_file(project / "App.csproj", "<Project />\n")
+    write_file(project / ".vs" / "App" / "v17" / ".suo", "vs\n")
+    write_file(project / "TestResults" / "run.trx", "<TestRun />\n")
+    write_file(project / "packages" / "repositories.config", "<repositories />\n")
+    write_file(project / "packages" / "Newtonsoft.Json.12.0.3" / "lib" / "net45" / "n.dll", "dll\n")
+    docs_packages = project / "docs" / "packages"
+    write_file(docs_packages / "notes.txt", "not nuget\n")
+    fake_results = project / "docs" / "TestResults"
+    write_file(fake_results / "readme.md", "not trx\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    by_path = {item.path: item for item in plan.targets}
+
+    assert str(project / ".vs") in by_path
+    assert by_path[str(project / ".vs")].profile == "cache"
+    assert str(project / "TestResults") in by_path
+    assert by_path[str(project / "TestResults")].profile == "build"
+    assert str(project / "packages") in by_path
+    assert by_path[str(project / "packages")].profile == "deps"
+    assert str(docs_packages) not in by_path
+    assert str(fake_results) not in by_path
+
+
+def test_discover_testresults_by_nested_trx(tmp_path: Path) -> None:
+    """TestResults at a git root without sln still matches when a nested .trx exists."""
+    project = tmp_path / "starblog"
+    project.mkdir()
+    init_git_repo(project)
+    write_file(project / "README.md", "hi\n")
+    write_file(project / "TestResults" / "guid-folder" / "run.trx", "<TestRun />\n")
+
+    plan = discover_clean_targets([tmp_path], default_scan_options())
+    paths = {item.path for item in plan.targets}
+    assert str(project / "TestResults") in paths
 
 
 def test_apply_clean_targets_deletes_only_selected(tmp_path: Path) -> None:
