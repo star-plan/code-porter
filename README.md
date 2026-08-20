@@ -133,12 +133,12 @@ uvx code-porter clean ~/code -p all --apply --yes
 
 Profile 说明：
 
-- `deps`：`node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache` 等可重装依赖（推荐）
-- `cache`：`.next`、`.cache`、`__pycache__`、`gocache` 等各类工具缓存
-- `build`：`dist`、`build`、`target` 等构建产物（风险更高，需有意选择）；以及紧挨 `.csproj` / `.fsproj` / `.vbproj` / `.sln` 的 `bin`、`obj`
+- `deps`：`node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache` 等可重装依赖（推荐）；以及含 `repositories.config` 的老 NuGet `packages`
+- `cache`：`.next`、`.cache`、`.vs`、`__pycache__`、`gocache` 等各类工具缓存
+- `build`：`dist`、`build`、`target` 等构建产物（风险更高，需有意选择）；以及紧挨 `.csproj` / `.fsproj` / `.vbproj` / `.sln` 的 `bin`、`obj`，和 VSTest 的 `TestResults`
 - `all`：以上全部（仍永远不会删除 `.git`）
 
-匹配按**目录名（basename）**，因此 `.tmp/uv-cache`、`.tmp/gocache` 这类嵌套缓存也会被识别；不会整目录删除可能混有业务文件的 `.tmp`。`bin` / `obj` 例外：只有父目录存在 .NET 工程文件时才作为 build 目标，避免误删脚本仓里的 `bin/`。
+匹配按**目录名（basename）**，因此 `.tmp/uv-cache`、`.tmp/gocache` 这类嵌套缓存也会被识别；不会整目录删除可能混有业务文件的 `.tmp`。歧义名字例外：`bin` / `obj` 需父目录有 .NET 工程文件；`TestResults` 需邻居工程文件或目录内有 `.trx`；`packages` 需含 `repositories.config`。scan 体积与 zip 导出使用同一套规则，因此不会把脚本仓的 `bin/` 排除掉。
 
 默认只预览不删除；必须显式 `--apply` 才会动手。非交互模式下 `--apply` 还需要 `-p/--profile` 与 `-y/--yes`。
 
@@ -161,7 +161,8 @@ Profile 说明：
 
 ## 说明
 
-- 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.git
+- 默认会排除 node_modules、.venv、dist、build、target、.next、.cache、.vs、.git；.NET 的 `bin`/`obj`/`TestResults` 按邻居规则排除，不会全局匹配名为 `bin` 的目录
+- scan 将 `*.csproj` / `*.fsproj` / `*.vbproj` / `*.sln` / `*.slnx` 识别为 dotnet 项目；无 git 时多个 csproj 会收束到最近的解决方案文件
 - scan 与 export 支持 `--large-dir-threshold-mb` 调整大目录阈值
 - scan 默认只输出紧凑表格与汇总；`--json` 纯 JSON，`--json-output` 写文件，`-v/--verbose` 显示完整列，`-s/--status` 按状态筛选
 - clean 默认 dry-run；交互终端可用 checkbox 勾选 profile；`--apply` 真删，非交互需 `-p` + `-y`

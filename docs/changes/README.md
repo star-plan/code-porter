@@ -27,6 +27,7 @@ description: |
 
 | 文档 | 完成日期 | 定位 |
 |------|----------|------|
+| [dotnet-followups.md](./completed/dotnet-followups.md) | 2026-08-21 | csproj/slnx 标记、scan/zip 排除 bin/obj、.vs/TestResults/packages |
 | [dotnet-bin-obj-clean.md](./completed/dotnet-bin-obj-clean.md) | 2026-08-21 | clean：仅当邻居有 .NET 工程文件时回收 bin/obj |
 | [scan-clean-result-sort.md](./completed/scan-clean-result-sort.md) | 2026-08-12 | scan/clean 结果 `--sort` / `--reverse` |
 

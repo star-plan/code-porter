@@ -48,7 +48,7 @@ code-porter 是一个**纯本地运行**的代码库导入/导出工具，面向
 
 ### 3.1 扫描（scan）
 
-- 按项目标记发现仓库根（如 `package.json`、`pyproject.toml`、`go.mod` 等）
+- 按项目标记发现仓库根（如 `package.json`、`pyproject.toml`、`go.mod`、`*.csproj` / `*.sln` / `*.slnx` 等）
 - 判断：是否 Git、是否有 remote、是否干净、大目录、默认垃圾目录、是否值得导出
 - 默认紧凑表格 + 汇总；可选 JSON 输出与状态筛选
 

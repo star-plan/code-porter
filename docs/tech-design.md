@@ -63,6 +63,7 @@ code-porter/
 │       ├── cli.py              # Typer 命令与终端渲染
 │       ├── models.py           # 领域模型与枚举
 │       ├── scanner.py          # 项目发现与扫描
+│       ├── junk.py             # 可重建目录的 basename / 上下文判定
 │       ├── archive.py          # 导出 / 导入 / manifest
 │       └── cleaner.py          # 垃圾目录发现与删除
 ├── tests/
@@ -77,6 +78,7 @@ code-porter/
 |------|------|
 | `cli.py` | 命令入口、参数、进度条、表格输出、状态筛选 |
 | `scanner.py` | 按 marker 发现项目、Git 状态、大小、打包策略建议 |
+| `junk.py` | .NET 工程文件识别、歧义 junk 目录的上下文规则 |
 | `archive.py` | bundle/zip/overlay 导出、manifest 读写、导入流程 |
 | `cleaner.py` | clean profile、目标发现、dry-run / apply |
 | `models.py` | `ProjectReport`、`PackageEntry`、`ExportManifest` 等 |
@@ -85,9 +87,10 @@ code-porter/
 
 ```text
 cli → scanner / archive / cleaner
-archive → models, scanner（DEFAULT_EXCLUDES）
-cleaner → scanner（discover_projects）
-scanner → models
+archive → models, scanner（DEFAULT_EXCLUDES）, junk
+cleaner → scanner（discover_projects）, junk
+scanner → models, junk
+junk → （无内部模块依赖）
 ```
 
 ## 三、打包策略
@@ -131,10 +134,11 @@ build
 target
 .next
 .cache
+.vs
 .git
 ```
 
-（实现以 `scanner.DEFAULT_EXCLUDES` 为准；`clean` 的 profile 集合更细，见 `cleaner.CLEAN_PROFILES`。无歧义目录按 basename 匹配，嵌套路径如 `.tmp/uv-cache` 也会生效，但不会整删混合用途的 `.tmp`。`bin` / `obj` 需父目录存在 `.csproj` / `.fsproj` / `.vbproj` / `.sln` 才进入 `build` profile，避免误删脚本仓的 `bin/`。）
+（实现以 `scanner.DEFAULT_EXCLUDES` 为准；`clean` 的 profile 集合更细，见 `cleaner.CLEAN_PROFILES`。无歧义目录按 basename 匹配，嵌套路径如 `.tmp/uv-cache` 也会生效，但不会整删混合用途的 `.tmp`。歧义名字由 `junk.contextual_junk_profile` 判定：`bin` / `obj` 需邻居 .NET 工程文件；`TestResults` 需邻居工程文件或内部 `.trx`；老 NuGet `packages` 需含 `repositories.config`。scan 体积统计与 zip 导出共用该判定，不会把 `bin` 写入全局排除表。）
 
 ## 四、导出目录与 Manifest
 
@@ -189,7 +193,7 @@ exports/windows-backup/
 | `pyproject.toml` | python |
 | `go.mod` | go |
 | `Cargo.toml` | rust |
-| `*.sln` 等 | dotnet（及实现中的扩展规则） |
+| `*.sln` / `*.slnx` / `*.csproj` / `*.fsproj` / `*.vbproj` | dotnet（优先于同目录或同仓库里后到的 `package.json` 等；无 git 时收束到最近解决方案文件） |
 
 未识别标记时可为 `unknown`，仍可能作为目录项目处理（以实现为准）。
 
@@ -217,9 +221,9 @@ exports/windows-backup/
 
 | Profile | 典型目录 | 风险 |
 |---------|----------|------|
-| `deps` | `node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache` | 可重装，推荐 |
-| `cache` | `.next`、`.cache`、`__pycache__`、`gocache` 等 | 可重建 |
-| `build` | `dist`、`build`、`target` 等；以及紧挨 .NET 工程文件的 `bin`、`obj` | 较高，需有意选择 |
+| `deps` | `node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache`；含 `repositories.config` 的 NuGet `packages` | 可重装，推荐 |
+| `cache` | `.next`、`.cache`、`.vs`、`__pycache__`、`gocache` 等 | 可重建 |
+| `build` | `dist`、`build`、`target` 等；紧挨 .NET 工程文件的 `bin`、`obj`；VSTest `TestResults` | 较高，需有意选择 |
 | `all` | 以上全部 | 仍永不删 `.git` |
 
 安全约束：
@@ -227,7 +231,7 @@ exports/windows-backup/
 1. 默认 dry-run，仅列表
 2. `--apply` 才删除；非交互还需 `-p/--profile` 与 `-y/--yes`
 3. `PROTECTED_DIR_NAMES` 含 `.git`
-4. `bin` / `obj` 不按名字全局匹配：父目录须有 `.csproj` / `.fsproj` / `.vbproj` / `.sln`（发现与 apply 共用该判定）
+4. `bin` / `obj` / `TestResults` / NuGet `packages` 不按名字全局匹配（见 `junk.py`；发现、apply、scan、zip 共用）
 
 ## 七、CLI 命令面
 
