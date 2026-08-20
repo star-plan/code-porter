@@ -134,7 +134,7 @@ target
 .git
 ```
 
-（实现以 `scanner.DEFAULT_EXCLUDES` 为准；`clean` 的 profile 集合更细，见 `cleaner.CLEAN_PROFILES`。按 basename 匹配，嵌套路径如 `.tmp/uv-cache` 也会生效，但不会整删混合用途的 `.tmp`。）
+（实现以 `scanner.DEFAULT_EXCLUDES` 为准；`clean` 的 profile 集合更细，见 `cleaner.CLEAN_PROFILES`。无歧义目录按 basename 匹配，嵌套路径如 `.tmp/uv-cache` 也会生效，但不会整删混合用途的 `.tmp`。`bin` / `obj` 需父目录存在 `.csproj` / `.fsproj` / `.vbproj` / `.sln` 才进入 `build` profile，避免误删脚本仓的 `bin/`。）
 
 ## 四、导出目录与 Manifest
 
@@ -219,7 +219,7 @@ exports/windows-backup/
 |---------|----------|------|
 | `deps` | `node_modules`、`.venv`、`venv`、`.uv-cache` / `uv-cache`、`gomodcache` | 可重装，推荐 |
 | `cache` | `.next`、`.cache`、`__pycache__`、`gocache` 等 | 可重建 |
-| `build` | `dist`、`build`、`target` 等 | 较高，需有意选择 |
+| `build` | `dist`、`build`、`target` 等；以及紧挨 .NET 工程文件的 `bin`、`obj` | 较高，需有意选择 |
 | `all` | 以上全部 | 仍永不删 `.git` |
 
 安全约束：
@@ -227,6 +227,7 @@ exports/windows-backup/
 1. 默认 dry-run，仅列表
 2. `--apply` 才删除；非交互还需 `-p/--profile` 与 `-y/--yes`
 3. `PROTECTED_DIR_NAMES` 含 `.git`
+4. `bin` / `obj` 不按名字全局匹配：父目录须有 `.csproj` / `.fsproj` / `.vbproj` / `.sln`（发现与 apply 共用该判定）
 
 ## 七、CLI 命令面
 

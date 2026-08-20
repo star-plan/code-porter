@@ -27,6 +27,7 @@ description: |
 
 | 文档 | 完成日期 | 定位 |
 |------|----------|------|
+| [dotnet-bin-obj-clean.md](./completed/dotnet-bin-obj-clean.md) | 2026-08-21 | clean：仅当邻居有 .NET 工程文件时回收 bin/obj |
 | [scan-clean-result-sort.md](./completed/scan-clean-result-sort.md) | 2026-08-12 | scan/clean 结果 `--sort` / `--reverse` |
 
 ## 已归档 plans
